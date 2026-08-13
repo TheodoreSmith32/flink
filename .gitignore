@@ -1,0 +1,10 @@
+venv/
+env/
+.venv/
+ENV/
+
+# secrets -- pakai template.env sebagai contoh, isi .env asli jangan di-commit
+.env
+
+__pycache__/
+*.pyc
