@@ -1,47 +1,139 @@
-# Tutorial PyFlink — dari Nol
+# PyFlink — Belajar dari Nol
 
-Catatan belajar untuk project ini. Urutan file di bawah sengaja dari yang
-paling sederhana ke yang makin dekat dengan pemakaian nyata. Baca urut dari
-atas ke bawah, dan coba jalankan tiap script sebelum lanjut ke yang
-berikutnya.
+Project belajar pribadi untuk PyFlink (Apache Flink Table API). Berisi
+serangkaian script kecil yang disusun bertahap, dari yang paling sederhana
+(batch, data hardcode) sampai yang mendekati pemakaian nyata (source/sink
+file, Kafka, dan sebuah notebook web buat submit SQL/Python interaktif).
 
-## Daftar isi
+## Daftar Isi
 
-1. [Setup](#1-setup)
-2. [`hello_flink.py` — Table API dasar (mode BATCH)](#2-hello_flinkpy--table-api-dasar-mode-batch)
-3. [`hello_flink_streaming.py` — mode STREAMING](#3-hello_flink_streamingpy--mode-streaming)
-4. [`hello_flink_file.py` — SOURCE dari file](#4-hello_flink_filepy--source-dari-file)
-5. [`hello_flink_sink.py` — SINK ke file](#5-hello_flink_sinkpy--sink-ke-file)
-6. [`hello_flink_to_csv.py` — CSV tanpa sink table](#6-hello_flink_to_csvpy--csv-tanpa-sink-table)
-7. [`hello_flink_kafka.py` — SOURCE dari Kafka](#7-hello_flink_kafkapy--source-dari-kafka)
-8. [`api/` — UI notebook buat submit SQL](#8-api--ui-notebook-buat-submit-sql)
-9. [Tab Python di `api/` — notebook kode, bukan cuma SQL](#9-tab-python-di-api--notebook-kode-bukan-cuma-sql)
-10. [Tab LLM Chat di `api/` — ngobrol ke Gemini](#10-tab-llm-chat-di-api--ngobrol-ke-gemini)
-11. [Istilah penting](#11-istilah-penting)
-12. [Langkah berikutnya](#12-langkah-berikutnya)
+1. [Overview](#overview)
+2. [Struktur Project](#struktur-project)
+3. [Tech Stack](#tech-stack)
+4. [Prerequisites](#prerequisites)
+5. [Getting Started](#getting-started)
+6. [Environment Variables](#environment-variables)
+7. [Integrations](#integrations)
+8. [Usage](#usage)
+9. [Istilah Penting](#istilah-penting)
+10. [Langkah Berikutnya](#langkah-berikutnya)
 
 ---
 
-## 1. Setup
+## Overview
 
-Project ini pakai virtualenv (`.venv`) dengan `apache-flink==1.17.2`
-(lihat `requirements.txt`).
+Urutan file di project ini sengaja dari yang paling sederhana ke yang makin
+dekat dengan pemakaian nyata. Baca urut dari atas ke bawah pada bagian
+[Usage](#usage), dan coba jalankan tiap script sebelum lanjut ke yang
+berikutnya:
 
-Flink 1.17 **tidak jalan di Java 21** (default JVM di sistem ini). Karena
-itu, `.venv/bin/activate` sudah dimodifikasi supaya otomatis set
-`JAVA_HOME` ke Java 11 setiap kali venv diaktifkan, dan mengembalikannya
-lagi saat `deactivate`. Jadi cukup:
+1. `hello_flink.py` — Table API dasar, mode **BATCH**.
+2. `hello_flink_streaming.py` — mode **STREAMING**.
+3. `hello_flink_file.py` — **source** dari file (`data/kalimat.csv`).
+4. `hello_flink_sink.py` — **sink** ke file.
+5. `hello_flink_to_csv.py` — CSV lewat pandas, tanpa sink table.
+6. `hello_flink_kafka.py` — **source** dari Kafka.
+7. `api/` — service FastAPI dengan UI notebook (tab SQL, Python, dan LLM
+   Chat) untuk submit query interaktif dari browser.
+
+## Struktur Project
+
+```
+.
+├── api/                          # Service notebook (FastAPI + UI web)
+│   ├── main.py                   # Endpoint FastAPI (jobs, py-jobs, chat)
+│   ├── flink_runner.py           # Eksekusi job SQL, TableEnvironment bersama
+│   ├── python_runner.py          # Eksekusi cell Python (exec), state persist
+│   ├── llm_runner.py             # Chat ke Gemini (google-genai)
+│   └── static/index.html         # UI notebook (tab SQL/Python/LLM Chat)
+├── data/                         # Data contoh + hasil output sink/CSV
+│   └── kalimat.csv               # Source data untuk hello_flink_file.py
+├── jars/                         # JAR connector tambahan
+│   └── flink-sql-connector-kafka-1.17.2.jar
+├── hello_flink.py                # 1. Table API dasar (BATCH)
+├── hello_flink_streaming.py      # 2. Mode STREAMING
+├── hello_flink_file.py           # 3. Source dari file
+├── hello_flink_sink.py           # 4. Sink ke file
+├── hello_flink_to_csv.py         # 5. CSV tanpa sink table
+├── hello_flink_kafka.py          # 6. Source dari Kafka
+├── requirements.txt
+├── template.env                  # Contoh .env (isi .env asli jangan di-commit)
+└── .env                          # Kredensial lokal (di-gitignore)
+```
+
+## Tech Stack
+
+| Teknologi | Versi | Kegunaan |
+|---|---|---|
+| Python | 3.10 | Bahasa utama project (lihat `.venv`) |
+| apache-flink | 1.17.2 | Table API — batch & streaming |
+| fastapi | 0.141.1 | Server notebook web di `api/` |
+| uvicorn | 0.52.1 | ASGI server untuk FastAPI |
+| pandas | 2.3.3 | `.to_pandas()` di `hello_flink_to_csv.py` |
+| pyarrow | 11.0.0 | Dibutuhkan `.to_pandas()` |
+| python-dotenv | 1.2.2 | Baca konfigurasi dari `.env` |
+| google-genai | 2.17.0 | Tab "LLM Chat" (Gemini) di `api/` |
+
+Rencana ke depan (belum diimplementasikan): **Dinky + Flink session
+cluster** lewat Docker, lihat `template.env` dan [Langkah
+Berikutnya](#langkah-berikutnya).
+
+## Prerequisites
+
+- Python 3.10 (virtualenv sudah disiapkan di `.venv`)
+- **Java 11** — Flink 1.17 **tidak jalan di Java 21** (default JVM di banyak
+  sistem terbaru). `.venv/bin/activate` sudah dimodifikasi supaya otomatis
+  set `JAVA_HOME` ke Java 11 saat venv diaktifkan, dan mengembalikannya lagi
+  saat `deactivate` — jadi tidak perlu set `JAVA_HOME` manual.
+
+## Getting Started
 
 ```bash
 source .venv/bin/activate
-python <nama_script>.py
+pip install -r requirements.txt   # kalau dependency belum terpasang
+python hello_flink.py             # contoh paling sederhana, mode BATCH
 ```
 
-Tidak perlu set `JAVA_HOME` manual lagi.
+Tidak perlu langkah instalasi Java/JAVA_HOME manual — sudah ditangani oleh
+`.venv/bin/activate` seperti dijelaskan di [Prerequisites](#prerequisites).
 
----
+## Environment Variables
 
-## 2. `hello_flink.py` — Table API dasar (mode BATCH)
+Isi `.env` di root project (contoh nilainya ada di `template.env`). Jangan
+commit `.env` asli — sudah masuk `.gitignore`.
+
+| Nama | Deskripsi | Default | Wajib |
+|---|---|---|---|
+| `KAFKA_BOOTSTRAP_SERVERS` | Alamat broker Kafka (multi-broker dipisah koma tanpa spasi) | `<PLACEHOLDER>` | Ya, untuk `hello_flink_kafka.py` & tab notebook yang baca Kafka |
+| `KAFKA_TOPIC` | Nama topic Kafka yang dibaca | `<PLACEHOLDER>` | Ya, sama seperti di atas |
+| `GEMINI_API_KEY` | API key untuk tab "LLM Chat" (Gemini). Buat di https://aistudio.google.com/apikey | `<PLACEHOLDER>` | Ya, untuk tab LLM Chat di `api/` |
+| `GEMINI_MODEL` | Nama model Gemini yang dipakai | `gemini-flash-latest` | Tidak |
+| `DINKY_VERSION` | Versi image Dinky (rencana setup Docker) | `1.2.5` | Tidak (belum dipakai kode saat ini) |
+| `FLINK_VERSION` | Versi mayor Flink untuk Dinky | `1.17` | Tidak (belum dipakai kode saat ini) |
+| `FLINK_FULL_VERSION` | Versi lengkap Flink untuk Dinky | `1.17.2` | Tidak (belum dipakai kode saat ini) |
+| `TZ` | Timezone container Dinky | `Asia/Jakarta` | Tidak (belum dipakai kode saat ini) |
+| `DB_ACTIVE` | Metadata DB Dinky: `h2`, `mysql`, atau `postgresql` | `mysql` | Tidak (belum dipakai kode saat ini) |
+| `MYSQL_ADDR` | Alamat MySQL untuk metadata Dinky | `<PLACEHOLDER>` | Tidak (belum dipakai kode saat ini) |
+| `MYSQL_DATABASE` | Nama database MySQL Dinky | `<PLACEHOLDER>` | Tidak (belum dipakai kode saat ini) |
+| `MYSQL_USERNAME` | Username MySQL Dinky | `<PLACEHOLDER>` | Tidak (belum dipakai kode saat ini) |
+| `MYSQL_PASSWORD` | Password MySQL Dinky | `<PLACEHOLDER>` | Tidak (belum dipakai kode saat ini) |
+| `MYSQL_ROOT_PASSWORD` | Root password MySQL Dinky | `<PLACEHOLDER>` | Tidak (belum dipakai kode saat ini) |
+
+> Variabel `DINKY_*`, `FLINK_*`, `TZ`, `DB_ACTIVE`, `MYSQL_*` sudah ada di
+> `template.env` untuk setup **Dinky + Flink cluster** via Docker yang masih
+> direncanakan (lihat [Langkah Berikutnya](#langkah-berikutnya)) — belum
+> dibaca oleh kode Python manapun di project ini saat ini.
+
+## Integrations
+
+| Service | Kegunaan | Koneksi |
+|---|---|---|
+| Kafka | Source unbounded untuk `hello_flink_kafka.py` dan tab notebook | Connector Flink `kafka` via JAR di `jars/flink-sql-connector-kafka-1.17.2.jar`, didaftarkan lewat `pipeline.jars`; alamat broker & topic dari `.env` |
+| Google Gemini | Tab "LLM Chat" di notebook `api/` | SDK `google-genai`, autentikasi via `GEMINI_API_KEY` di `.env` |
+
+## Usage
+
+### 1. `hello_flink.py` — Table API dasar (mode BATCH)
 
 Contoh paling sederhana. Intinya:
 
@@ -58,9 +150,12 @@ Mode yang dipakai: `EnvironmentSettings.in_batch_mode()` — cocok untuk
 data yang sudah "selesai"/tetap (bounded), seperti file atau tabel
 database. Hasilnya dihitung sekali sampai tuntas, baru ditampilkan.
 
----
+```bash
+source .venv/bin/activate
+python hello_flink.py
+```
 
-## 3. `hello_flink_streaming.py` — mode STREAMING
+### 2. `hello_flink_streaming.py` — mode STREAMING
 
 Sama persis dengan `hello_flink.py`, hanya satu baris yang beda:
 
@@ -78,11 +173,12 @@ streamnya ada ujungnya), tapi **cara Flink mengeksekusi beda**:
   ter-update. Ini disebut **changelog / retraction**, dan merupakan ciri
   khas dari agregasi (`COUNT`, `GROUP BY`, dll) di streaming.
 
-Perlu `JAVA_HOME` ke Java 11 (lihat [Setup](#1-setup)).
+```bash
+source .venv/bin/activate
+python hello_flink_streaming.py
+```
 
----
-
-## 4. `hello_flink_file.py` — SOURCE dari file
+### 3. `hello_flink_file.py` — SOURCE dari file
 
 Sampai sini, data masih hardcode di Python. Script ini menggantinya
 dengan **source** sungguhan: baca dari `data/kalimat.csv` lewat konektor
@@ -108,11 +204,14 @@ ke Python (`.collect()`), dipecah jadi kata, dimasukkan lagi sebagai
 
 > Kenapa masih ditarik ke Python untuk di-split? Karena split kata per
 > spasi belum ditulis sebagai SQL/UDF di tahap ini — itu ada di roadmap
-> [Python UDF](#11-langkah-berikutnya).
+> [Python UDF](#langkah-berikutnya).
 
----
+```bash
+source .venv/bin/activate
+python hello_flink_file.py
+```
 
-## 5. `hello_flink_sink.py` — SINK ke file
+### 4. `hello_flink_sink.py` — SINK ke file
 
 Kalau source itu Flink **membaca** dari suatu tempat, sink itu Flink
 **menulis** ke suatu tempat. Connector-nya bisa sama (`filesystem`),
@@ -156,9 +255,12 @@ Poin penting:
   folder**, bukan satu file tunggal — makanya script membaca semua file
   di folder tersebut, bukan satu file dengan nama tetap.
 
----
+```bash
+source .venv/bin/activate
+python hello_flink_sink.py
+```
 
-## 6. `hello_flink_to_csv.py` — CSV tanpa sink table
+### 5. `hello_flink_to_csv.py` — CSV tanpa sink table
 
 Section sebelumnya (`hello_flink_sink.py`) nulis hasil ke file dengan cara
 "Flink banget": `CREATE TABLE ... WITH ('connector'='filesystem', ...)`
@@ -193,15 +295,12 @@ Python).
 `pandas` dan `pyarrow` dibutuhkan untuk `.to_pandas()` (sudah ada di
 `requirements.txt`).
 
-Jalankan:
 ```bash
 source .venv/bin/activate
 python hello_flink_to_csv.py
 ```
 
----
-
-## 7. `hello_flink_kafka.py` — SOURCE dari Kafka
+### 6. `hello_flink_kafka.py` — SOURCE dari Kafka
 
 Konsepnya identik dengan `hello_flink_file.py`: `CREATE TABLE ... WITH
 (...)`, cuma `'connector'` sekarang `'kafka'`, bukan `'filesystem'`. Yang
@@ -209,7 +308,7 @@ beda justru hal-hal di sekitarnya, karena Kafka topic itu **unbounded**
 (tidak ada ujungnya) sementara file sebelumnya **bounded**:
 
 - **Butuh JAR connector tambahan.** `pip install apache-flink` tidak
-  membawa connector Kafka -- itu didownload terpisah ke
+  membawa connector Kafka — itu didownload terpisah ke
   `jars/flink-sql-connector-kafka-1.17.2.jar` (versi HARUS cocok dengan
   versi `apache-flink` di `requirements.txt`), lalu didaftarkan ke Flink
   lewat `t_env.get_config().set("pipeline.jars", f"file://{jar_path}")`
@@ -219,32 +318,30 @@ beda justru hal-hal di sekitarnya, karena Kafka topic itu **unbounded**
   `python-dotenv`). Alasannya sederhana: alamat broker itu detail
   environment/kredensial, bukan sesuatu yang seharusnya ikut nempel di
   kode.
-- **Script ini tidak pernah selesai sendiri** selama topic-nya hidup --
+- **Script ini tidak pernah selesai sendiri** selama topic-nya hidup —
   beda dengan `hello_flink_streaming.py` yang walau "streaming mode",
   datanya tetap bounded (list Python yang ada habisnya). Di sini
   sumbernya beneran tidak berhenti, jadi `.execute().print()` akan terus
   mencetak baris baru sampai di-`Ctrl+C`.
 - **`format = 'raw'`** dipakai karena skema pesan di topic belum tentu
-  diketahui -- seluruh isi pesan dibaca apa adanya jadi satu kolom
+  diketahui — seluruh isi pesan dibaca apa adanya jadi satu kolom
   STRING. Kalau nanti tahu formatnya (misal JSON), `format` bisa diganti
   supaya field-field-nya otomatis jadi kolom terpisah, bukan satu string
   mentah.
 
-Sebelum jalan, isi dulu `.env`:
+Sebelum jalan, isi dulu `.env` (lihat [Environment
+Variables](#environment-variables)):
 ```
 KAFKA_BOOTSTRAP_SERVERS=broker1:9092,broker2:9092
 KAFKA_TOPIC=topic_kafka
 ```
 
-Jalankan:
 ```bash
 source .venv/bin/activate
 python hello_flink_kafka.py
 ```
 
----
-
-## 8. `api/` — UI notebook buat submit SQL
+### 7. `api/` — UI notebook buat submit SQL
 
 Sampai `hello_flink_sink.py`, tiap kali mau coba SQL baru kita harus edit
 script Python dan jalankan ulang dari terminal. Folder `api/` mengubah itu
@@ -281,14 +378,14 @@ Poin penting:
 - **Satu `TableEnvironment` dipakai bersama untuk SEMUA cell** (dibuat
   sekali secara lazy di `flink_runner._get_env()`, bukan dibuat baru
   tiap job seperti versi awal). Ini yang bikin tabel yang dibuat di satu
-  cell tetap "diingat" dan bisa dipakai di cell lain -- persis seperti
+  cell tetap "diingat" dan bisa dipakai di cell lain — persis seperti
   notebook beneran. Konsekuensinya, job tetap dieksekusi satu-satu lewat
   `threading.Lock`, karena satu `TableEnvironment` yang sama dipakai
   bareng-bareng dan tidak aman dieksekusi dari banyak thread sekaligus.
 - **Preview baris dibatasi (`PREVIEW_ROW_LIMIT = 20`).** Kalau SELECT-nya
   dari source **unbounded** (misal Kafka, seperti di
   `hello_flink_kafka.py`), narik SEMUA hasilnya lewat `.collect()` biasa
-  akan menggantung selamanya -- dan karena environment-nya dipakai
+  akan menggantung selamanya — dan karena environment-nya dipakai
   bersama, itu bakal nge-block SEMUA cell lain juga. Solusinya: tarik
   maksimal 20 baris lewat `itertools.islice()`, lalu **tutup iterator-nya
   lebih awal**. Menutup iterator ternyata juga membatalkan job Flink di
@@ -301,15 +398,16 @@ Poin penting:
   'properties.bootstrap.servers' = '${KAFKA_BOOTSTRAP_SERVERS}'
   ```
   Ini konsisten dengan alasan `KAFKA_BOOTSTRAP_SERVERS` disimpan di
-  `.env` sejak awal (lihat [section 7](#7-hello_flink_kafkapy--source-dari-kafka))
-  -- broker Kafka tidak perlu diketik ulang langsung di textarea browser.
+  `.env` sejak awal (lihat [section 6](#6-hello_flink_kafkapy--source-dari-kafka))
+  — broker Kafka tidak perlu diketik ulang langsung di textarea browser.
   JAR connector Kafka juga otomatis didaftarkan tiap kali environment ini
   dibuat, jadi `CREATE TABLE ... WITH ('connector'='kafka', ...)` bisa
   langsung dicoba dari notebook ini tanpa langkah tambahan.
 - Ini masih versi **embedded**: Flink-nya hidup selama proses FastAPI
   hidup, bukan cluster terpisah. Kalau server FastAPI mati, tabel & job
   history ikut hilang. Versi "tetap jalan walau server restart" itu yang
-  nanti dijembatani oleh setup **Dinky + Flink cluster** di `.env`.
+  nanti dijembatani oleh setup **Dinky + Flink cluster** (lihat
+  `template.env` dan [Langkah Berikutnya](#langkah-berikutnya)).
 
 Jalankan:
 
@@ -344,46 +442,43 @@ CREATE TABLE kafka_source (message STRING) WITH (
 SELECT message FROM kafka_source;
 ```
 
----
+#### Tab Python di `api/` — notebook kode, bukan cuma SQL
 
-## 9. Tab Python di `api/` — notebook kode, bukan cuma SQL
-
-Section sebelumnya cuma bisa submit **SQL**. Kadang itu kurang -- misalnya
-mau lihat `df.describe()` dari hasil `to_pandas()`, atau logic-nya lebih
-gampang ditulis Python daripada SQL. Halaman `/` sekarang punya 2 tab:
-"SQL Notebook" (section 8) dan "Python Notebook" (baru).
-
-Cara kerjanya mirip banget dengan tab SQL, cuma bedanya isi cell-nya kode
-Python biasa, dieksekusi lewat `exec()` di server (`api/python_runner.py`):
+Halaman notebook (`api/static/index.html`) punya tab kedua: "Python
+Notebook", untuk kasus yang kurang cocok ditulis SQL (misalnya
+`df.describe()` dari hasil `to_pandas()`, atau logic yang lebih gampang
+ditulis Python). Cara kerjanya mirip tab SQL, cuma isi cell-nya kode
+Python biasa, dieksekusi lewat `exec()` di server
+(`api/python_runner.py`):
 
 - **Endpoint terpisah**, pola sama: `POST /py-jobs` (submit kode, balas
   `job_id`), `GET /py-jobs/{id}` (polling status + `stdout`/`error`),
   `GET /py-jobs` (daftar semua).
-- **Variabel persist antar cell**, sama seperti Jupyter -- `x = 5` di satu
+- **Variabel persist antar cell**, sama seperti Jupyter — `x = 5` di satu
   cell, `print(x)` di cell lain (submission terpisah) tetap kebaca. Ini
   jalan lewat satu dictionary Python (`_GLOBALS`) yang dipakai bareng
   sebagai namespace `exec()`, dibuat sekali lalu dipakai ulang.
-- **Berbagi `TableEnvironment` yang SAMA dengan tab SQL** -- variabel
+- **Berbagi `TableEnvironment` yang SAMA dengan tab SQL** — variabel
   `t_env` sudah otomatis tersedia di tiap cell Python, dan sudah dites:
   tabel yang dibuat lewat tab SQL bisa langsung di-`sql_query()` dari tab
   Python, dan sebaliknya.
 - **Lock yang dipakai juga SAMA** dengan tab SQL (`flink_runner.LOCK`,
-  bukan lock terpisah) -- karena keduanya menyentuh `t_env` yang sama,
+  bukan lock terpisah) — karena keduanya menyentuh `t_env` yang sama,
   tidak boleh dieksekusi bersamaan dari dua thread berbeda.
 - **Output cuma dari `print()`** (di-redirect lewat
-  `contextlib.redirect_stdout`) -- sengaja TIDAK ada auto-display
+  `contextlib.redirect_stdout`) — sengaja TIDAK ada auto-display
   ekspresi terakhir seperti Jupyter (mis. cuma nulis `df` doang tanpa
   `print()`), biar perilakunya predictable dan implementasinya simpel.
 - **Error ditampilkan sebagai traceback lengkap** (`traceback.format_exc()`),
-  bukan cuma `str(exc)` -- jadi kelihatan baris mana di cell yang error,
+  bukan cuma `str(exc)` — jadi kelihatan baris mana di cell yang error,
   sama seperti traceback Python biasa. Sudah dites: `stdout` sebelum baris
   yang error tetap tersimpan/ditampilkan.
 
 > **Peringatan keamanan:** tab ini menjalankan Python **apa adanya** lewat
-> `exec()` -- termasuk baca/tulis file, `os.system(...)`, dst. Ini oke
+> `exec()` — termasuk baca/tulis file, `os.system(...)`, dst. Ini oke
 > untuk dipakai sendiri di localhost (default `uvicorn` cuma bind ke
 > `127.0.0.1`), tapi JANGAN expose service ini ke jaringan/internet tanpa
-> autentikasi -- siapa pun yang bisa akses endpoint `/py-jobs` otomatis
+> autentikasi — siapa pun yang bisa akses endpoint `/py-jobs` otomatis
 > bisa menjalankan kode apa saja di mesin ini.
 
 Contoh (jalankan di tab Python setelah tabel `t` dibuat lewat tab SQL):
@@ -394,16 +489,14 @@ print(df)
 print("jumlah baris:", len(df))
 ```
 
----
+#### Tab LLM Chat di `api/` — ngobrol ke Gemini
 
-## 10. Tab LLM Chat di `api/` — ngobrol ke Gemini
-
-Tab ketiga di halaman notebook (`api/static/index.html`), ditaruh paling
-kiri. Beda dengan tab SQL/Python, tab ini **berdiri sendiri total** --
-tidak menyentuh `t_env`, `flink_runner.LOCK`, atau apapun yang berkaitan
-dengan Flink. Alasannya: LLM chat itu gak ada hubungan sama sekali sama
-eksekusi query Flink, jadi kenapa harus ikut nyangkut kalau ada SQL/Python
-job yang lagi macet (atau sebaliknya)?
+Tab ketiga di halaman notebook, ditaruh paling kiri. Beda dengan tab
+SQL/Python, tab ini **berdiri sendiri total** — tidak menyentuh `t_env`,
+`flink_runner.LOCK`, atau apapun yang berkaitan dengan Flink. Alasannya:
+LLM chat itu gak ada hubungan sama sekali sama eksekusi query Flink, jadi
+kenapa harus ikut nyangkut kalau ada SQL/Python job yang lagi macet (atau
+sebaliknya)?
 
 Isinya (`api/llm_runner.py`):
 
@@ -411,13 +504,13 @@ Isinya (`api/llm_runner.py`):
   (yang sudah gak banyak di-update lagi).
 - **Multi-turn**: pakai `client.chats.create(...)`, sebuah objek "chat
   session" dari SDK yang otomatis nyimpen history dan ngirim ulang
-  semuanya ke Gemini tiap kali `send_message()` dipanggil -- jadi
+  semuanya ke Gemini tiap kali `send_message()` dipanggil — jadi
   percakapannya nyambung, gak berdiri sendiri-sendiri tiap pesan.
-- History cuma hidup di memory proses ini (variabel modul `_chat`) --
+- History cuma hidup di memory proses ini (variabel modul `_chat`) —
   hilang kalau server di-restart, sama seperti job history SQL/Python.
-- **API key dari `.env`** (`GEMINI_API_KEY`), bukan hardcode -- pola yang
+- **API key dari `.env`** (`GEMINI_API_KEY`), bukan hardcode — pola yang
   sama dengan `KAFKA_BOOTSTRAP_SERVERS`. Nama model juga dari `.env`
-  (`GEMINI_MODEL`, default `gemini-flash-latest` -- alias yang selalu
+  (`GEMINI_MODEL`, default `gemini-flash-latest` — alias yang selalu
   nunjuk ke model flash terbaru yang direkomendasikan Google, bukan versi
   spesifik seperti `gemini-2.5-flash` yang bisa di-deprecate untuk API
   key baru), biar gampang ganti tanpa edit kode.
@@ -435,19 +528,18 @@ Kenapa boleh sinkron padahal `/jobs` sengaja async+polling? Karena alasan
 `/jobs` pakai pola itu adalah job Flink bisa lama DAN bisa saling
 nge-block lewat `LOCK` bersama. Panggilan ke Gemini cuma makan beberapa
 detik dan gak menyentuh `LOCK` apapun, jadi request biasa (tunggu
-responsnya langsung) sudah cukup -- gak perlu kerumitan job_id/polling
+responsnya langsung) sudah cukup — gak perlu kerumitan job_id/polling
 buat sesuatu yang gak ada masalah yang perlu diselesaikan lewat itu.
 
-Sebelum jalan, isi `.env`:
+Sebelum jalan, isi `.env` (lihat [Environment
+Variables](#environment-variables)):
 ```
 GEMINI_API_KEY=...
 GEMINI_MODEL=gemini-flash-latest
 ```
 Bikin API key di https://aistudio.google.com/apikey kalau belum punya.
 
----
-
-## 11. Istilah penting
+## Istilah Penting
 
 | Istilah | Arti singkat |
 |---|---|
@@ -462,13 +554,11 @@ Bikin API key di https://aistudio.google.com/apikey kalau belum punya.
 | **`.to_pandas()`** | Menarik hasil sebuah `Table` jadi pandas DataFrame di memory Python. Praktis untuk hasil kecil (skip bikin sink table), tapi tidak cocok untuk data besar/stream tanpa akhir karena semuanya ditarik sekaligus ke memory. |
 | **`pipeline.jars`** | Config buat mendaftarkan JAR connector (misal Kafka) yang tidak ikut ter-bundle di `pip install apache-flink`, lewat `t_env.get_config().set("pipeline.jars", "file://...")`. |
 | **`format = 'raw'`** | Opsi connector yang membaca seluruh isi pesan (misal dari Kafka) apa adanya sebagai satu kolom STRING, tanpa asumsi struktur (JSON/Avro/dst). Dipakai saat skema pesan belum diketahui. |
-| **Notebook (di `api/`)** | Beberapa cell SQL yang berbagi satu `TableEnvironment` yang sama, jadi tabel yang dibuat di satu cell tetap bisa dipakai di cell lain -- beda dengan versi awal `api/` yang bikin `TableEnvironment` baru tiap job. |
+| **Notebook (di `api/`)** | Beberapa cell SQL yang berbagi satu `TableEnvironment` yang sama, jadi tabel yang dibuat di satu cell tetap bisa dipakai di cell lain — beda dengan versi awal `api/` yang bikin `TableEnvironment` baru tiap job. |
 | **Preview (row limit)** | Pembatasan jumlah baris yang ditarik dari SELECT (`PREVIEW_ROW_LIMIT` di `flink_runner.py`) supaya SELECT dari source unbounded tidak menggantung selamanya dan tidak nge-block job lain di notebook yang sama. |
-| **`exec()`** | Fungsi Python bawaan buat menjalankan string kode Python. Dipakai di `python_runner.py` untuk mengeksekusi isi cell tab Python -- ini yang bikin kode APAPUN bisa dijalankan (lihat peringatan keamanan di [section 9](#9-tab-python-di-api--notebook-kode-bukan-cuma-sql)). |
+| **`exec()`** | Fungsi Python bawaan buat menjalankan string kode Python. Dipakai di `python_runner.py` untuk mengeksekusi isi cell tab Python — ini yang bikin kode APAPUN bisa dijalankan (lihat peringatan keamanan di [Tab Python](#tab-python-di-api--notebook-kode-bukan-cuma-sql)). |
 
----
-
-## 12. Langkah berikutnya
+## Langkah Berikutnya
 
 Urutan yang direkomendasikan dari sini:
 
@@ -496,11 +586,13 @@ Urutan yang direkomendasikan dari sini:
    `hello_flink_kafka.py` jadi `'json'` biar field-fieldnya otomatis jadi
    kolom terpisah, bukan satu string mentah.
 10. **Python UDF** — begitu logic makin kompleks (misal split kata
-   langsung di SQL, bukan ditarik ke Python dulu seperti sekarang), UDF
-   jadi diperlukan.
+    langsung di SQL, bukan ditarik ke Python dulu seperti sekarang), UDF
+    jadi diperlukan.
 11. **Job history persisten** — sekarang daftar job di `api/` hilang
-   begitu server FastAPI di-restart (disimpan di dictionary Python biasa).
-   Langkah lanjutan yang wajar: simpan ke SQLite biar job history tetap
-   ada, atau connect ke Flink session cluster beneran biar job tetap jalan
-   walau server API-nya mati (lihat opsi "Flink session cluster" yang
-   sempat dibahas).
+    begitu server FastAPI di-restart (disimpan di dictionary Python biasa).
+    Langkah lanjutan yang wajar: simpan ke SQLite biar job history tetap
+    ada, atau connect ke **Flink session cluster** beneran (lewat setup
+    **Dinky + Flink** di `template.env`) biar job tetap jalan walau server
+    API-nya mati.
+
+<!-- Generated by readme-generator skill -->
