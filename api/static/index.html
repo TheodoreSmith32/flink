@@ -24,6 +24,39 @@
   .chat-panel.hidden { display: none; }
   .chat-panel h2 { margin: 0 0 0.25rem; font-size: 1rem; }
   .main-panel { flex: 1; min-width: 0; overflow-y: auto; padding-bottom: 1rem; }
+  .hidden { display: none; }
+  .session-bar { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 1rem; }
+  .session-bar label { font-size: 14px; color: #555; }
+  .session-bar select { padding: 0.3rem 0.5rem; font-size: 14px; }
+  .session-empty { border: 1px dashed #bbb; border-radius: 6px; padding: 1.5rem; text-align: center; color: #555; }
+  .session-empty button { margin-top: 0.75rem; }
+  .connector-catalog { border: 1px solid #ddd; border-radius: 6px; padding: 0.5rem 0.75rem; margin-bottom: 1rem; }
+  .connector-catalog summary { cursor: pointer; font-weight: bold; padding: 0.25rem 0; }
+  .connector-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 0.75rem; margin-top: 0.5rem; }
+  .connector-card { border: 1px solid #e0e0e0; border-radius: 6px; padding: 0.6rem 0.75rem; background: #fafafa; }
+  .connector-card h4 { margin: 0 0 0.25rem; font-size: 14px; display: flex; align-items: center; gap: 0.4rem; }
+  .connector-card p { margin: 0 0 0.5rem; font-size: 12.5px; color: #555; }
+  .connector-badge { font-size: 11px; padding: 1px 6px; border-radius: 10px; font-weight: normal; }
+  .connector-badge.available { background: #dcf5e0; color: #1a7f37; }
+  .connector-badge.unavailable { background: #fdecea; color: #a33; }
+  .connector-card button { font-size: 12.5px; padding: 0.3rem 0.6rem; }
+  .mode-badge { font-size: 11px; padding: 2px 8px; border-radius: 10px; background: #e8eefc; color: #2563eb; font-weight: bold; margin-left: auto; }
+  .chat-code-block { margin: 0.4rem 0; }
+  .chat-code-block pre { background: #1e1e1e; color: #e6e6e6; padding: 0.5rem 0.6rem; border-radius: 6px; font-size: 12.5px; overflow-x: auto; white-space: pre; margin: 0 0 0.35rem; }
+  .chat-submit-btn { font-size: 12px; padding: 0.25rem 0.55rem; }
+  .table-catalog { border: 1px solid #ddd; border-radius: 6px; padding: 0.5rem 0.75rem; margin-bottom: 1rem; }
+  .table-catalog-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.4rem; }
+  .table-catalog-header strong { font-size: 14px; }
+  .table-catalog-header button { font-size: 12.5px; padding: 0.25rem 0.6rem; }
+  .table-row { border: 1px solid #e0e0e0; border-radius: 6px; padding: 0.5rem 0.65rem; margin-bottom: 0.5rem; background: #fafafa; }
+  .table-row:last-child { margin-bottom: 0; }
+  .table-row-head { display: flex; align-items: center; gap: 0.5rem; }
+  .table-row-head h4 { margin: 0; font-size: 13.5px; }
+  .table-kind-badge { font-size: 10.5px; padding: 1px 6px; border-radius: 10px; background: #e8eefc; color: #2563eb; }
+  .table-columns { font-size: 12px; color: #555; margin: 0.3rem 0 0; }
+  .table-ddl { margin-top: 0.3rem; }
+  .table-ddl summary { cursor: pointer; font-size: 12px; color: #2563eb; }
+  .table-ddl pre { background: #1e1e1e; color: #e6e6e6; padding: 0.5rem 0.6rem; border-radius: 6px; font-size: 12px; overflow-x: auto; white-space: pre; margin: 0.3rem 0 0; }
   @media (max-width: 900px) {
     body { height: auto; }
     .app-layout { flex-direction: column; }
@@ -71,10 +104,11 @@
 <body>
   <h1>PyFlink Notebook</h1>
   <p class="subtitle"><small class="hint">
-    Tab SQL dan tab Python berbagi TableEnvironment yang sama (<code>t_env</code>) -- tabel yang dibuat di satu tab bisa langsung dipakai di tab lain.
+    Notebook SQL/Python butuh SESSION dulu -- tiap session punya TableEnvironment sendiri, jadi tabel/state satu session tidak bocor ke session lain.
+    Di dalam satu session, tab SQL dan tab Python tetap berbagi TableEnvironment yang sama (<code>t_env</code>) -- tabel yang dibuat di satu tab bisa langsung dipakai di tab lain.
     SELECT dari source unbounded (misal Kafka) otomatis dibatasi ke beberapa baris pertama saja (preview).
     Alamat sensitif (misal broker Kafka) bisa dirujuk pakai <code>${NAMA_VAR}</code> di SQL, diambil dari <code>.env</code> di server.
-    LLM Chat ada permanen di panel kiri -- terpisah total dari Flink, jadi tetap bisa dipakai walau SQL/Python lagi nyangkut (dan sebaliknya).
+    LLM Chat ada permanen di panel kiri -- terpisah total dari Flink dan dari session, jadi tetap bisa dipakai walau SQL/Python lagi nyangkut (dan sebaliknya).
   </small></p>
 
   <div class="app-layout">
@@ -98,23 +132,54 @@
     </aside>
 
     <main class="main-panel">
-      <div class="tabs">
-        <button class="tab-btn active" data-tab="sql">SQL Notebook</button>
-        <button class="tab-btn" data-tab="python">Python Notebook</button>
+      <div class="session-bar">
+        <label for="session-select">Session:</label>
+        <select id="session-select"></select>
+        <button class="secondary" id="session-new">+ Session baru</button>
+        <button class="secondary" id="session-delete">Hapus session</button>
+        <span class="mode-badge" title="Tiap session pakai TableEnvironment mode streaming (EnvironmentSettings.in_streaming_mode()) -- agregat (COUNT/SUM/dst) bisa muncul sebagai baris update/retraction, bukan cuma satu baris hasil akhir seperti mode batch.">&#9889; Streaming Job Mode</span>
       </div>
 
-      <div id="tab-sql" class="tab-panel active">
-        <div class="cells" id="sql-cells"></div>
-        <button class="secondary add-cell" data-target="sql">+ Tambah cell SQL</button>
+      <div id="session-empty" class="session-empty">
+        <p>Belum ada session aktif. Notebook SQL/Python butuh session dulu -- tiap session punya TableEnvironment sendiri (tabel/state tidak bocor ke session lain).</p>
+        <p><small class="hint">Jumlah session aktif dibatasi di server -- kalau sudah penuh, hapus session lama dulu.</small></p>
+        <p><small class="hint">Semua session berjalan di <strong>Streaming Job Mode</strong> -- bukan batch, jadi hasil agregat (COUNT/SUM/dst) bisa berupa baris update/retraction, bukan satu baris hasil akhir.</small></p>
+        <button id="session-empty-create">Buat session pertama</button>
       </div>
 
-      <div id="tab-python" class="tab-panel">
-        <p><small class="hint">
-          Variabel <code>t_env</code> sudah tersedia. Output cell cuma yang di-<code>print()</code> -- tidak ada auto-display ekspresi terakhir seperti Jupyter.
-          Variabel yang dibuat di satu cell tetap ada di cell berikutnya.
-        </small></p>
-        <div class="cells" id="python-cells"></div>
-        <button class="secondary add-cell" data-target="python">+ Tambah cell Python</button>
+      <div id="notebook-area" class="hidden">
+        <div class="tabs">
+          <button class="tab-btn active" data-tab="sql">SQL Notebook</button>
+          <button class="tab-btn" data-tab="python">Python Notebook</button>
+        </div>
+
+        <div class="table-catalog" id="table-catalog">
+          <div class="table-catalog-header">
+            <strong>Tabel di session ini</strong>
+            <button class="secondary" id="table-refresh">Refresh</button>
+          </div>
+          <div class="table-list" id="table-list">
+            <p><small class="hint">Belum ada table/view di session ini.</small></p>
+          </div>
+        </div>
+
+        <div id="tab-sql" class="tab-panel active">
+          <details class="connector-catalog" id="connector-catalog" open>
+            <summary>Daftar connector yang tersedia</summary>
+            <div class="connector-list" id="connector-list"></div>
+          </details>
+          <div class="cells" id="sql-cells"></div>
+          <button class="secondary add-cell" data-target="sql">+ Tambah cell SQL</button>
+        </div>
+
+        <div id="tab-python" class="tab-panel">
+          <p><small class="hint">
+            Variabel <code>t_env</code> sudah tersedia. Output cell cuma yang di-<code>print()</code> -- tidak ada auto-display ekspresi terakhir seperti Jupyter.
+            Variabel yang dibuat di satu cell tetap ada di cell berikutnya.
+          </small></p>
+          <div class="cells" id="python-cells"></div>
+          <button class="secondary add-cell" data-target="python">+ Tambah cell Python</button>
+        </div>
       </div>
     </main>
   </div>
@@ -168,6 +233,11 @@
         config.renderResult(job, resultEl);
         if (job.status === "PENDING" || job.status === "RUNNING") {
           pollTimer = setTimeout(() => pollJob(jobId), 1000);
+        } else if (job.status === "SUCCESS") {
+          // Cell (SQL ATAU Python) barusan sukses -- mungkin ada table/view
+          // baru dibuat, jadi refresh panel "Tabel di session ini" otomatis
+          // tanpa nunggu user klik Refresh manual.
+          refreshTableList();
         }
       }
 
@@ -179,7 +249,7 @@
         statusEl.className = "status";
 
         try {
-          const res = await fetch(config.submitUrl, {
+          const res = await fetch(config.submitUrl(), {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(config.buildPayload(textarea.value)),
@@ -207,10 +277,13 @@
     }
 
     // --- Konfigurasi tab SQL ---
+    // submitUrl/jobsUrl bergantung pada session yang lagi aktif (currentSessionId,
+    // lihat bagian "Session management" di bawah), jadi ditulis sebagai fungsi,
+    // bukan string statis seperti sebelum ada session.
     const sqlConfig = {
       containerEl: document.getElementById("sql-cells"),
-      submitUrl: "/jobs",
-      jobsUrl: (id) => "/jobs/" + id,
+      submitUrl: () => "/sessions/" + currentSessionId + "/jobs",
+      jobsUrl: (id) => "/sessions/" + currentSessionId + "/jobs/" + id,
       buildPayload: (text) => ({ sql: text }),
       placeholder: "Tulis SQL di sini, pisahkan statement dengan ;",
       renderResult(job, resultEl) {
@@ -241,8 +314,8 @@
     // --- Konfigurasi tab Python ---
     const pythonConfig = {
       containerEl: document.getElementById("python-cells"),
-      submitUrl: "/py-jobs",
-      jobsUrl: (id) => "/py-jobs/" + id,
+      submitUrl: () => "/sessions/" + currentSessionId + "/py-jobs",
+      jobsUrl: (id) => "/sessions/" + currentSessionId + "/py-jobs/" + id,
       buildPayload: (text) => ({ code: text }),
       placeholder: "Tulis kode Python di sini, misal:\nprint(t_env.list_tables())",
       renderResult(job, resultEl) {
@@ -267,6 +340,202 @@
       });
     });
 
+    // --- Session management ---
+    // Notebook SQL/Python butuh session aktif dulu (lihat session_manager.py
+    // di backend) -- currentSessionId menentukan endpoint mana yang dipanggil
+    // cell (lihat submitUrl/jobsUrl di sqlConfig/pythonConfig di atas).
+    const SESSION_STORAGE_KEY = "pyflink_session_id";
+    let currentSessionId = null;
+    let sessions = [];
+
+    async function fetchSessions() {
+      const res = await fetch("/sessions");
+      sessions = await res.json();
+      return sessions;
+    }
+
+    function renderSessionSelect() {
+      const select = document.getElementById("session-select");
+      select.innerHTML = "";
+      for (const s of sessions) {
+        const opt = document.createElement("option");
+        opt.value = s.id;
+        opt.textContent = s.name;
+        select.appendChild(opt);
+      }
+      if (currentSessionId) select.value = currentSessionId;
+    }
+
+    function updateSessionUI() {
+      document.getElementById("session-empty").classList.toggle("hidden", !!currentSessionId);
+      document.getElementById("notebook-area").classList.toggle("hidden", !currentSessionId);
+      document.getElementById("session-delete").disabled = !currentSessionId;
+      document.getElementById("session-select").disabled = sessions.length === 0;
+    }
+
+    function clearCells() {
+      document.getElementById("sql-cells").innerHTML = "";
+      document.getElementById("python-cells").innerHTML = "";
+    }
+
+    function seedExampleCells() {
+      addCell(sqlConfig, `CREATE TABLE t (a INT, b STRING) WITH ('connector'='datagen','number-of-rows'='5');
+SELECT a, b FROM t;`);
+      addCell(pythonConfig, `# t_env sama dengan yang dipakai tab SQL -- tabel "t" di atas bisa langsung dipakai di sini
+df = t_env.sql_query("SELECT a, b FROM t").to_pandas()
+print(df)`);
+    }
+
+    function switchSession(sessionId) {
+      currentSessionId = sessionId;
+      localStorage.setItem(SESSION_STORAGE_KEY, sessionId);
+      clearCells();
+      renderSessionSelect();
+      updateSessionUI();
+      seedExampleCells();
+      refreshTableList();
+    }
+
+    async function createSession() {
+      const name = prompt("Nama session (misal: belajar-windowing):", "session-" + (sessions.length + 1));
+      if (name === null) return;
+      const trimmed = name.trim();
+      if (!trimmed) return;
+
+      const res = await fetch("/sessions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: trimmed }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        alert(data.detail || "Gagal membuat session");
+        return;
+      }
+      await fetchSessions();
+      switchSession(data.id);
+    }
+
+    async function deleteSession() {
+      if (!currentSessionId) return;
+      if (!confirm("Hapus session ini? Semua tabel & job history di session ini akan hilang.")) return;
+
+      await fetch("/sessions/" + currentSessionId, { method: "DELETE" });
+      localStorage.removeItem(SESSION_STORAGE_KEY);
+      currentSessionId = null;
+      clearCells();
+
+      await fetchSessions();
+      if (sessions.length > 0) {
+        switchSession(sessions[0].id);
+      } else {
+        renderSessionSelect();
+        updateSessionUI();
+      }
+    }
+
+    document.getElementById("session-new").addEventListener("click", createSession);
+    document.getElementById("session-empty-create").addEventListener("click", createSession);
+    document.getElementById("session-delete").addEventListener("click", deleteSession);
+    document.getElementById("session-select").addEventListener("change", (e) => switchSession(e.target.value));
+
+    async function initSessions() {
+      await fetchSessions();
+      const saved = localStorage.getItem(SESSION_STORAGE_KEY);
+      const savedIsValid = saved && sessions.some((s) => s.id === saved);
+      if (savedIsValid) {
+        switchSession(saved);
+      } else if (sessions.length > 0) {
+        switchSession(sessions[0].id);
+      } else {
+        renderSessionSelect();
+        updateSessionUI();
+      }
+    }
+
+    initSessions();
+
+    // --- Katalog connector (tab SQL) ---
+    // Data reference, tidak terikat session apa pun -- dimuat sekali saat
+    // halaman dibuka. Tombol "+ Pakai contoh ini" cuma nambah cell SQL baru
+    // isi template-nya (lihat addCell(sqlConfig, ...)), user masih perlu
+    // klik Run sendiri seperti cell manapun.
+    async function loadConnectors() {
+      const res = await fetch("/connectors");
+      const connectorList = await res.json();
+      const listEl = document.getElementById("connector-list");
+      listEl.innerHTML = "";
+
+      for (const c of connectorList) {
+        const card = document.createElement("div");
+        card.className = "connector-card";
+        const badgeClass = c.available ? "available" : "unavailable";
+        const badgeText = c.available ? "siap pakai" : "JAR belum ada";
+        card.innerHTML = `
+          <h4>${escapeHtml(c.label)}<span class="connector-badge ${badgeClass}">${badgeText}</span></h4>
+          <p>${escapeHtml(c.description)}</p>
+          <button class="secondary use-connector" ${c.available ? "" : "disabled"}>+ Pakai contoh ini</button>
+        `;
+        card.querySelector(".use-connector").addEventListener("click", () => {
+          if (!currentSessionId) {
+            alert("Buat/pilih session dulu sebelum pakai contoh connector ini.");
+            return;
+          }
+          addCell(sqlConfig, c.template);
+        });
+        listEl.appendChild(card);
+      }
+    }
+
+    loadConnectors();
+
+    // --- Panel "Tabel di session ini" ---
+    // Beda dari katalog connector (statis, tidak terikat session), ini baca
+    // t_env.list_tables() dari session yang lagi aktif lewat GET
+    // /sessions/{id}/tables -- lihat flink_runner.list_tables(). Direfresh
+    // otomatis tiap ganti/bikin session (switchSession()) dan tiap ada cell
+    // SQL/Python yang sukses (lihat pollJob()), plus tombol Refresh manual.
+    async function refreshTableList() {
+      const listEl = document.getElementById("table-list");
+      if (!currentSessionId) {
+        listEl.innerHTML = '<p><small class="hint">Belum ada table/view di session ini.</small></p>';
+        return;
+      }
+
+      try {
+        const res = await fetch("/sessions/" + currentSessionId + "/tables");
+        if (!res.ok) throw new Error((await res.json()).detail || "Gagal memuat daftar table");
+        const tables = await res.json();
+
+        if (!tables.length) {
+          listEl.innerHTML = '<p><small class="hint">Belum ada table/view di session ini.</small></p>';
+          return;
+        }
+
+        listEl.innerHTML = "";
+        for (const t of tables) {
+          const row = document.createElement("div");
+          row.className = "table-row";
+          const columnsText = t.columns.length
+            ? t.columns.map((c) => `${c.name} ${c.type}`).join(", ")
+            : "(skema tidak terbaca)";
+          row.innerHTML = `
+            <div class="table-row-head">
+              <h4>${escapeHtml(t.name)}</h4>
+              <span class="table-kind-badge">${escapeHtml(t.kind)}</span>
+            </div>
+            <p class="table-columns">${escapeHtml(columnsText)}</p>
+            ${t.ddl ? `<details class="table-ddl"><summary>Lihat DDL</summary><pre>${escapeHtml(t.ddl)}</pre></details>` : ""}
+          `;
+          listEl.appendChild(row);
+        }
+      } catch (e) {
+        listEl.innerHTML = `<p><small class="hint">Gagal memuat daftar table: ${escapeHtml(e.message)}</small></p>`;
+      }
+    }
+
+    document.getElementById("table-refresh").addEventListener("click", refreshTableList);
+
     // --- Toggle panel LLM Chat ---
     const chatPanelEl = document.getElementById("chat-panel");
     const chatToggleBtn = document.getElementById("chat-toggle");
@@ -282,10 +551,72 @@
     const chatSendBtn = document.getElementById("chat-send");
     const chatResetBtn = document.getElementById("chat-reset");
 
+    // Deteksi blok ```sql / ```python di balasan Gemini (lihat SYSTEM_INSTRUCTION
+    // di llm_runner.py yang minta model pakai tag ini kalau kodenya memang buat
+    // dijalankan di notebook) dan render dengan tombol "Kirim ke ... Notebook".
+    // Cuma insert sebagai cell baru -- TIDAK auto-run, user tetap harus klik Run
+    // sendiri, sesuai kesepakatan soal keamanan exec() di tab Python.
+    const CODE_FENCE_PATTERN = /```(\w+)?\n?([\s\S]*?)```/g;
+
+    function renderBubbleContent(bubbleEl, text) {
+      bubbleEl.innerHTML = "";
+      let lastIndex = 0;
+      let match;
+      CODE_FENCE_PATTERN.lastIndex = 0;
+      while ((match = CODE_FENCE_PATTERN.exec(text)) !== null) {
+        appendTextSegment(bubbleEl, text.slice(lastIndex, match.index));
+        appendCodeSegment(bubbleEl, (match[1] || "").toLowerCase(), match[2].replace(/\n$/, ""));
+        lastIndex = CODE_FENCE_PATTERN.lastIndex;
+      }
+      appendTextSegment(bubbleEl, text.slice(lastIndex));
+    }
+
+    function appendTextSegment(bubbleEl, segment) {
+      if (!segment) return;
+      const span = document.createElement("span");
+      span.textContent = segment;
+      bubbleEl.appendChild(span);
+    }
+
+    function appendCodeSegment(bubbleEl, lang, code) {
+      const wrap = document.createElement("div");
+      wrap.className = "chat-code-block";
+      const pre = document.createElement("pre");
+      pre.textContent = code;
+      wrap.appendChild(pre);
+
+      if (lang === "sql" || lang === "python") {
+        const btn = document.createElement("button");
+        btn.className = "secondary chat-submit-btn";
+        btn.textContent = lang === "sql" ? "Kirim ke SQL Notebook" : "Kirim ke Python Notebook";
+        btn.addEventListener("click", () => submitChatCode(lang, code));
+        wrap.appendChild(btn);
+      }
+      bubbleEl.appendChild(wrap);
+    }
+
+    function submitChatCode(lang, code) {
+      if (!currentSessionId) {
+        alert("Buat/pilih session dulu sebelum kirim kode ini ke notebook.");
+        return;
+      }
+      const label = lang === "sql" ? "SQL" : "Python";
+      let confirmMsg = `Yakin mau kirim kode ${label} ini ke notebook?\n\nKode akan dimasukkan sebagai cell baru -- BELUM dijalankan, kamu tetap perlu klik Run sendiri di cell itu.`;
+      if (lang === "python") {
+        confirmMsg += "\n\nPERINGATAN: cell Python dijalankan lewat exec() (kode Python apa adanya) -- baca dulu kodenya sebelum di-Run.";
+      }
+      if (!confirm(confirmMsg)) return;
+
+      const config = lang === "sql" ? sqlConfig : pythonConfig;
+      addCell(config, code);
+      document.querySelector(`.tab-btn[data-tab="${lang}"]`).click();
+    }
+
     function renderChatMessage(role, text) {
       const div = document.createElement("div");
       div.className = "chat-msg " + (role === "user" ? "user" : "model");
-      div.innerHTML = `<div class="role">${role === "user" ? "Kamu" : "Gemini"}</div><div class="bubble">${escapeHtml(text)}</div>`;
+      div.innerHTML = `<div class="role">${role === "user" ? "Kamu" : "Gemini"}</div><div class="bubble"></div>`;
+      renderBubbleContent(div.querySelector(".bubble"), text);
       chatMessagesEl.appendChild(div);
       chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;
       return div;
@@ -313,7 +644,12 @@
           body: JSON.stringify({ message: text }),
         });
         const data = await res.json();
-        thinkingEl.querySelector(".bubble").textContent = res.ok ? data.reply : "Error: " + (data.detail || "Request gagal");
+        const bubbleEl = thinkingEl.querySelector(".bubble");
+        if (res.ok) {
+          renderBubbleContent(bubbleEl, data.reply);
+        } else {
+          bubbleEl.textContent = "Error: " + (data.detail || "Request gagal");
+        }
       } catch (e) {
         thinkingEl.querySelector(".bubble").textContent = "Error: " + e.message;
       } finally {
@@ -334,13 +670,6 @@
     });
 
     loadChatHistory();
-
-    // Cell pertama tiap tab diisi contoh.
-    addCell(sqlConfig, `CREATE TABLE t (a INT, b STRING) WITH ('connector'='datagen','number-of-rows'='5');
-SELECT a, b FROM t;`);
-    addCell(pythonConfig, `# t_env sama dengan yang dipakai tab SQL -- tabel "t" di atas bisa langsung dipakai di sini
-df = t_env.sql_query("SELECT a, b FROM t").to_pandas()
-print(df)`);
   </script>
 </body>
 </html>

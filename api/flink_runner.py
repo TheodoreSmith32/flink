@@ -1,45 +1,36 @@
 """
 Modul ini yang beneran "ngobrol" sama PyFlink. Dipanggil dari background task
-FastAPI (lihat main.py), bukan langsung dari endpoint -- supaya POST /jobs
-bisa langsung balas job_id tanpa nunggu Flink selesai jalan.
+FastAPI (lihat main.py), bukan langsung dari endpoint -- supaya
+POST /sessions/{id}/jobs bisa langsung balas job_id tanpa nunggu Flink
+selesai jalan.
 
-Dipakai ala NOTEBOOK: satu TableEnvironment (_ENV) dibuat SEKALI lalu dipakai
-bersama untuk SEMUA job -- bukan bikin baru tiap job seperti versi awal.
-Ini supaya tabel yang dibuat di satu submission ("cell" di UI) tetap kepakai
-di submission berikutnya, sama seperti Jupyter/Zeppelin. Konsekuensinya:
-semua job dieksekusi SATU PER SATU lewat LOCK, karena satu TableEnvironment
-yang sama dipakai bareng-bareng dan tidak aman dieksekusi dari banyak
-thread sekaligus.
-
-`get_env()` dan `LOCK` sengaja diekspos publik (bukan `_get_env`/`_LOCK`)
-karena dipakai bareng oleh python_runner.py (notebook Python) -- supaya
-notebook SQL dan notebook Python berbagi TableEnvironment yang sama DAN
-tidak pernah mengeksekusi ke sana secara bersamaan dari dua thread.
+Sejak ada session_manager.py, job history dan TableEnvironment TIDAK lagi
+satu untuk seluruh proses: masing-masing Session (lihat
+session_manager.Session) punya job store dan TableEnvironment sendiri.
+Modul ini murni operasi atas sebuah Session yang dioper sebagai parameter --
+tidak lagi pegang state global sendiri seperti versi sebelum ada session.
 """
 
 import itertools
 import os
 import re
-import threading
 import time
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
 
 from dotenv import load_dotenv
-from pyflink.table import EnvironmentSettings, TableEnvironment
+from pyflink.table import TableEnvironment
 
-PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-load_dotenv(os.path.join(PROJECT_DIR, ".env"))
+from api import session_manager
+from api.session_manager import Session
+
+load_dotenv(os.path.join(session_manager.PROJECT_DIR, ".env"))
 
 # Berapa baris SELECT yang ditarik ke UI. Sengaja dibatasi supaya SELECT dari
-# source unbounded (misal Kafka) tidak nge-block job lain selamanya -- lihat
-# _run_select() di bawah.
+# source unbounded (misal Kafka) tidak nge-block job lain di session yang
+# sama selamanya -- lihat _run_select() di bawah.
 PREVIEW_ROW_LIMIT = 20
-
-LOCK = threading.Lock()
-_JOBS: dict[str, "Job"] = {}
-_ENV = None
 
 
 class JobStatus(str, Enum):
@@ -62,36 +53,18 @@ class Job:
     finished_at: float | None = None
 
 
-def create_job(sql: str) -> Job:
+def create_job(session: Session, sql: str) -> Job:
     job = Job(id=str(uuid.uuid4()), sql=sql)
-    _JOBS[job.id] = job
+    session.sql_jobs[job.id] = job
     return job
 
 
-def get_job(job_id: str) -> Job | None:
-    return _JOBS.get(job_id)
+def get_job(session: Session, job_id: str) -> Job | None:
+    return session.sql_jobs.get(job_id)
 
 
-def list_jobs() -> list[Job]:
-    return sorted(_JOBS.values(), key=lambda j: j.created_at, reverse=True)
-
-
-def get_env() -> TableEnvironment:
-    """Satu TableEnvironment untuk seumur hidup proses FastAPI -- dibuat
-    sekali saja (lazy), dipakai ulang di tiap run_job(). Diekspos publik
-    (tanpa underscore) karena python_runner.py (notebook Python) juga
-    pakai TableEnvironment yang SAMA lewat fungsi ini, biar tabel yang
-    dibuat lewat notebook SQL bisa dipakai dari notebook Python juga."""
-    global _ENV
-    if _ENV is None:
-        _ENV = TableEnvironment.create(EnvironmentSettings.in_streaming_mode())
-        # Daftarkan connector Kafka dari awal, sama seperti di
-        # hello_flink_kafka.py, biar notebook ini juga bisa CREATE TABLE
-        # ... WITH ('connector'='kafka', ...) tanpa langkah tambahan.
-        jar_path = os.path.join(PROJECT_DIR, "jars", "flink-sql-connector-kafka-1.17.2.jar")
-        if os.path.exists(jar_path):
-            _ENV.get_config().set("pipeline.jars", f"file://{jar_path}")
-    return _ENV
+def list_jobs(session: Session) -> list[Job]:
+    return sorted(session.sql_jobs.values(), key=lambda j: j.created_at, reverse=True)
 
 
 _ENV_VAR_PATTERN = re.compile(r"\$\{(\w+)\}")
@@ -124,11 +97,11 @@ def _run_select(t_env: TableEnvironment, statement: str, job: "Job") -> None:
     result = t_env.execute_sql(statement)
     job.columns = result.get_table_schema().get_field_names()
 
-    # Kunci biar notebook ini tidak macet kalau SELECT-nya dari source
+    # Kunci biar session ini tidak macet kalau SELECT-nya dari source
     # unbounded (Kafka dkk): tarik maksimal PREVIEW_ROW_LIMIT baris lewat
     # islice, lalu TUTUP iterator-nya. Menutup iterator lebih awal juga
     # membatalkan job Flink di baliknya (sudah dites), jadi tidak ada job
-    # nganggur yang numpuk di TableEnvironment yang dipakai bersama ini.
+    # nganggur yang numpuk di TableEnvironment session ini.
     iterator = result.collect()
     try:
         rows = list(itertools.islice(iterator, PREVIEW_ROW_LIMIT))
@@ -142,16 +115,62 @@ def _run_select(t_env: TableEnvironment, statement: str, job: "Job") -> None:
     job.truncated = len(rows) == PREVIEW_ROW_LIMIT
 
 
-def run_job(job_id: str) -> None:
+def list_tables(session: Session) -> list[dict]:
+    """Daftar semua table & view yang ada di TableEnvironment session ini,
+    lengkap dengan kolom (nama+tipe) dan DDL aslinya (lewat SHOW CREATE
+    TABLE/VIEW) -- dipakai panel "Tabel di session ini" di UI biar user
+    gampang inget apa aja yang sudah dibuat, tanpa harus nulis
+    SHOW TABLES / DESCRIBE manual di cell.
+
+    Dipanggil langsung dari endpoint (bukan lewat job_id + polling seperti
+    run_job()) karena baca metadata table itu cepat -- beda dengan
+    menjalankan SQL/Python yang bisa makan waktu.
+    """
+    t_env = session_manager.get_env(session)
+    view_names = set(t_env.list_views())
+    entries = []
+
+    for name in t_env.list_tables():
+        kind = "VIEW" if name in view_names else "TABLE"
+
+        columns = []
+        try:
+            schema = t_env.from_path(name).get_schema()
+            columns = [
+                {"name": field_name, "type": str(field_type)}
+                for field_name, field_type in zip(
+                    schema.get_field_names(), schema.get_field_data_types()
+                )
+            ]
+        except Exception:
+            pass
+
+        # SHOW CREATE TABLE vs SHOW CREATE VIEW beda statement di Flink --
+        # yang satu dipanggil ke object jenis lain langsung error.
+        ddl = None
+        try:
+            show_stmt = "SHOW CREATE VIEW" if kind == "VIEW" else "SHOW CREATE TABLE"
+            rows = list(t_env.execute_sql(f"{show_stmt} `{name}`").collect())
+            if rows:
+                ddl = rows[0][0]
+        except Exception:
+            pass
+
+        entries.append({"name": name, "kind": kind, "columns": columns, "ddl": ddl})
+
+    return sorted(entries, key=lambda e: e["name"])
+
+
+def run_job(session: Session, job_id: str) -> None:
     """Dipanggil sebagai FastAPI BackgroundTask -- fungsi sync biasa, supaya
     Starlette menjalankannya di threadpool dan tidak memblokir event loop
     yang melayani request lain."""
-    job = _JOBS[job_id]
+    job = session.sql_jobs[job_id]
     job.status = JobStatus.RUNNING
 
-    with LOCK:
+    with session.lock:
         try:
-            t_env = get_env()
+            t_env = session_manager.get_env(session)
             statements = _split_statements(_expand_env_vars(job.sql))
 
             for statement in statements:
