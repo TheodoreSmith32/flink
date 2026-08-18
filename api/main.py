@@ -46,7 +46,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from api import connectors, flink_runner, llm_runner, python_runner, session_manager
+from api import background_jobs, connectors, flink_runner, llm_runner, python_runner, session_manager
 
 app = FastAPI(title="PyFlink SQL Runner")
 
@@ -56,6 +56,7 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 class CreateSessionRequest(BaseModel):
     name: str
+    mode: str = "streaming"
 
 
 class SubmitSqlRequest(BaseModel):
@@ -68,6 +69,15 @@ class SubmitPyRequest(BaseModel):
 
 class ChatRequest(BaseModel):
     message: str
+
+
+class GenerateSqlRequest(BaseModel):
+    message: str
+
+
+class SubmitBackgroundJobRequest(BaseModel):
+    sql: str
+    name: str
 
 
 def _require_session(session_id: str) -> session_manager.Session:
@@ -92,16 +102,16 @@ def create_session(req: CreateSessionRequest):
     if not req.name.strip():
         raise HTTPException(status_code=400, detail="Nama session tidak boleh kosong")
     try:
-        session = session_manager.create_session(req.name.strip())
+        session = session_manager.create_session(req.name.strip(), req.mode)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    return {"id": session.id, "name": session.name, "created_at": session.created_at}
+    return {"id": session.id, "name": session.name, "mode": session.mode, "created_at": session.created_at}
 
 
 @app.get("/sessions")
 def list_sessions():
     return [
-        {"id": s.id, "name": s.name, "created_at": s.created_at}
+        {"id": s.id, "name": s.name, "mode": s.mode, "created_at": s.created_at}
         for s in session_manager.list_sessions()
     ]
 
@@ -139,6 +149,40 @@ def list_jobs(session_id: str):
     return flink_runner.list_jobs(session)
 
 
+@app.post("/sessions/{session_id}/background-jobs")
+def submit_background_job(session_id: str, req: SubmitBackgroundJobRequest):
+    session = _require_session(session_id)
+    if not req.sql.strip():
+        raise HTTPException(status_code=400, detail="SQL tidak boleh kosong")
+    if not req.name.strip():
+        raise HTTPException(status_code=400, detail="Nama job tidak boleh kosong")
+
+    # Sync (bukan BackgroundTask+polling seperti /jobs): submit-nya sendiri
+    # cepat (cuma compile + serahkan job graph ke Flink) -- yang jalan lama
+    # adalah JOB-nya, bukan panggilan submit ini. FastAPI (Starlette) sudah
+    # jalanin endpoint def biasa (bukan async def) di threadpool, jadi ini
+    # tidak memblokir request lain.
+    job = background_jobs.submit(session, req.sql, req.name.strip())
+    return background_jobs.to_dict(job)
+
+
+@app.get("/sessions/{session_id}/background-jobs")
+def list_background_jobs(session_id: str):
+    session = _require_session(session_id)
+    return background_jobs.list_jobs(session)
+
+
+@app.post("/sessions/{session_id}/background-jobs/{job_id}/stop")
+def stop_background_job(session_id: str, job_id: str):
+    session = _require_session(session_id)
+    try:
+        if not background_jobs.stop(session, job_id):
+            raise HTTPException(status_code=404, detail="Job tidak ditemukan")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"status": "ok"}
+
+
 @app.get("/sessions/{session_id}/tables")
 def list_tables(session_id: str):
     session = _require_session(session_id)
@@ -173,6 +217,19 @@ def get_py_job(session_id: str, job_id: str):
 def list_py_jobs(session_id: str):
     session = _require_session(session_id)
     return python_runner.list_jobs(session)
+
+
+@app.post("/sessions/{session_id}/generate-sql")
+def generate_sql(session_id: str, req: GenerateSqlRequest):
+    session = _require_session(session_id)
+    if not req.message.strip():
+        raise HTTPException(status_code=400, detail="Pesan tidak boleh kosong")
+
+    try:
+        sql = llm_runner.generate_sql(req.message, session)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    return {"sql": sql}
 
 
 @app.post("/chat")

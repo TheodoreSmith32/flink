@@ -115,12 +115,42 @@ def _run_select(t_env: TableEnvironment, statement: str, job: "Job") -> None:
     job.truncated = len(rows) == PREVIEW_ROW_LIMIT
 
 
+def _describe_table(t_env: TableEnvironment, name: str, kind: str) -> dict:
+    """Introspeksi SATU table/view: kolom (nama+tipe) + DDL asli (lewat SHOW
+    CREATE TABLE/VIEW). Dipakai bareng oleh list_tables() (semua table) dan
+    describe_table() (satu table, dipanggil sebagai tool oleh LLM agent di
+    llm_runner.generate_sql() -- lihat itu untuk konteks kenapa)."""
+    columns = []
+    try:
+        schema = t_env.from_path(name).get_schema()
+        columns = [
+            {"name": field_name, "type": str(field_type)}
+            for field_name, field_type in zip(
+                schema.get_field_names(), schema.get_field_data_types()
+            )
+        ]
+    except Exception:
+        pass
+
+    # SHOW CREATE TABLE vs SHOW CREATE VIEW beda statement di Flink --
+    # yang satu dipanggil ke object jenis lain langsung error.
+    ddl = None
+    try:
+        show_stmt = "SHOW CREATE VIEW" if kind == "VIEW" else "SHOW CREATE TABLE"
+        rows = list(t_env.execute_sql(f"{show_stmt} `{name}`").collect())
+        if rows:
+            ddl = rows[0][0]
+    except Exception:
+        pass
+
+    return {"name": name, "kind": kind, "columns": columns, "ddl": ddl}
+
+
 def list_tables(session: Session) -> list[dict]:
     """Daftar semua table & view yang ada di TableEnvironment session ini,
-    lengkap dengan kolom (nama+tipe) dan DDL aslinya (lewat SHOW CREATE
-    TABLE/VIEW) -- dipakai panel "Tabel di session ini" di UI biar user
-    gampang inget apa aja yang sudah dibuat, tanpa harus nulis
-    SHOW TABLES / DESCRIBE manual di cell.
+    lengkap dengan kolom (nama+tipe) dan DDL aslinya -- dipakai panel "Tabel
+    di session ini" di UI biar user gampang inget apa aja yang sudah dibuat,
+    tanpa harus nulis SHOW TABLES / DESCRIBE manual di cell.
 
     Dipanggil langsung dari endpoint (bukan lewat job_id + polling seperti
     run_job()) karena baca metadata table itu cepat -- beda dengan
@@ -128,37 +158,46 @@ def list_tables(session: Session) -> list[dict]:
     """
     t_env = session_manager.get_env(session)
     view_names = set(t_env.list_views())
-    entries = []
-
-    for name in t_env.list_tables():
-        kind = "VIEW" if name in view_names else "TABLE"
-
-        columns = []
-        try:
-            schema = t_env.from_path(name).get_schema()
-            columns = [
-                {"name": field_name, "type": str(field_type)}
-                for field_name, field_type in zip(
-                    schema.get_field_names(), schema.get_field_data_types()
-                )
-            ]
-        except Exception:
-            pass
-
-        # SHOW CREATE TABLE vs SHOW CREATE VIEW beda statement di Flink --
-        # yang satu dipanggil ke object jenis lain langsung error.
-        ddl = None
-        try:
-            show_stmt = "SHOW CREATE VIEW" if kind == "VIEW" else "SHOW CREATE TABLE"
-            rows = list(t_env.execute_sql(f"{show_stmt} `{name}`").collect())
-            if rows:
-                ddl = rows[0][0]
-        except Exception:
-            pass
-
-        entries.append({"name": name, "kind": kind, "columns": columns, "ddl": ddl})
-
+    entries = [
+        _describe_table(t_env, name, "VIEW" if name in view_names else "TABLE")
+        for name in t_env.list_tables()
+    ]
     return sorted(entries, key=lambda e: e["name"])
+
+
+def describe_table(session: Session, name: str) -> dict | None:
+    """Introspeksi satu table/view by name, atau None kalau tidak ada.
+    Dipanggil dari llm_runner.generate_sql()'s `describe_table` tool -- lewat
+    ini agent LLM bisa cek skema ASLI di session sebelum nulis SQL, bukan
+    menebak dari instruksi umum di system prompt. Caller (llm_runner) yang
+    pegang session.lock, bukan fungsi ini."""
+    t_env = session_manager.get_env(session)
+    if name not in t_env.list_tables():
+        return None
+    view_names = set(t_env.list_views())
+    return _describe_table(t_env, name, "VIEW" if name in view_names else "TABLE")
+
+
+def preview_select(session: Session, sql: str, limit: int = 5) -> dict:
+    """SELECT terbatas (read-only) yang dipanggil dari llm_runner.generate_sql()'s
+    `preview_rows` tool, supaya agent LLM bisa lihat CONTOH data asli sebelum
+    menjawab -- bukan cuma nama kolom. Sengaja menolak statement selain SELECT
+    (agent generate-SQL ini cuma boleh membaca, tidak pernah mengubah session).
+    Caller (llm_runner) yang pegang session.lock, bukan fungsi ini."""
+    if not sql.strip().upper().startswith("SELECT"):
+        raise ValueError("preview_rows cuma boleh dipakai untuk statement SELECT")
+
+    t_env = session_manager.get_env(session)
+    result = t_env.execute_sql(sql)
+    columns = result.get_table_schema().get_field_names()
+
+    iterator = result.collect()
+    try:
+        rows = list(itertools.islice(iterator, min(limit, PREVIEW_ROW_LIMIT)))
+    finally:
+        iterator.close()
+
+    return {"columns": columns, "rows": [list(row) for row in rows]}
 
 
 def run_job(session: Session, job_id: str) -> None:

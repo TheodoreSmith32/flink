@@ -4,105 +4,236 @@
 <meta charset="UTF-8" />
 <title>PyFlink Notebook</title>
 <style>
+  :root {
+    --bg: #f4f5f7;
+    --surface: #ffffff;
+    --border: #e3e6eb;
+    --border-strong: #cdd2db;
+    --text: #16181d;
+    --text-muted: #6b7280;
+    --text-faint: #8b93a1;
+    --primary: #2563eb;
+    --primary-hover: #1d4ed8;
+    --primary-bg: #eaf0fe;
+    --success: #15803d;
+    --success-bg: #e3f6e8;
+    --danger: #b91c1c;
+    --danger-bg: #fdecea;
+    --warning: #92660a;
+    --warning-bg: #fdf1d6;
+    --neutral: #565e6b;
+    --neutral-bg: #eceef2;
+    --radius: 10px;
+    --radius-sm: 7px;
+    --shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.05);
+    --shadow: 0 1px 3px rgba(16, 24, 40, 0.08), 0 1px 2px rgba(16, 24, 40, 0.04);
+    --mono: "SF Mono", "Cascadia Code", Consolas, "Roboto Mono", monospace;
+  }
+
+  * { box-sizing: border-box; }
+
   body {
-    font-family: system-ui, sans-serif; max-width: 1400px; margin: 1rem auto; padding: 0 1rem;
-    color: #1a1a1a; height: calc(100vh - 2rem); box-sizing: border-box; display: flex; flex-direction: column;
+    font-family: -apple-system, "Segoe UI", system-ui, sans-serif; max-width: 1440px; margin: 1.25rem auto; padding: 0 1.25rem;
+    color: var(--text); background: var(--bg); height: calc(100vh - 2.5rem); display: flex; flex-direction: column;
+    font-size: 14.5px; line-height: 1.5;
   }
-  h1 { margin: 0 0 0.2rem; }
-  p.subtitle { color: #666; margin: 0 0 0.75rem; }
+
+  h1 { margin: 0 0 0.15rem; font-size: 1.35rem; letter-spacing: -0.01em; }
+  h1 .app-icon { margin-right: 0.35rem; }
+  p.subtitle {
+    color: var(--text-muted); margin: 0 0 1rem; background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius-sm); padding: 0.65rem 0.9rem; box-shadow: var(--shadow-sm); line-height: 1.6;
+  }
+  p.subtitle code {
+    background: var(--neutral-bg); color: var(--text); padding: 1px 5px; border-radius: 4px; font-family: var(--mono); font-size: 0.92em;
+  }
+
   .app-layout { display: flex; gap: 0; flex: 1; min-height: 0; }
-  .chat-toggle-strip {
-    flex-shrink: 0; display: flex; align-items: flex-start; padding-top: 0.1rem; margin-right: 0.75rem;
-  }
+  .chat-toggle-strip { flex-shrink: 0; display: flex; align-items: flex-start; padding-top: 0.1rem; margin-right: 0.75rem; }
   #chat-toggle {
-    padding: 0.4rem 0.5rem; font-size: 14px; line-height: 1; border: 1px solid #ccc; background: #fff; border-radius: 6px;
+    padding: 0.45rem 0.55rem; font-size: 14px; line-height: 1; border: 1px solid var(--border-strong);
+    background: var(--surface); border-radius: var(--radius-sm); color: var(--text-muted); box-shadow: var(--shadow-sm);
   }
+  #chat-toggle:hover { background: var(--neutral-bg); }
+
   .chat-panel {
-    width: 360px; flex-shrink: 0; display: flex; flex-direction: column;
-    border-right: 1px solid #ddd; padding-right: 1.5rem; margin-right: 0.75rem; min-height: 0;
+    width: 360px; flex-shrink: 0; display: flex; flex-direction: column; min-height: 0;
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 0.9rem; margin-right: 0.9rem; box-shadow: var(--shadow-sm);
   }
   .chat-panel.hidden { display: none; }
-  .chat-panel h2 { margin: 0 0 0.25rem; font-size: 1rem; }
+  .chat-panel h2 { margin: 0 0 0.3rem; font-size: 1rem; }
   .main-panel { flex: 1; min-width: 0; overflow-y: auto; padding-bottom: 1rem; }
   .hidden { display: none; }
-  .session-bar { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 1rem; }
-  .session-bar label { font-size: 14px; color: #555; }
-  .session-bar select { padding: 0.3rem 0.5rem; font-size: 14px; }
-  .session-empty { border: 1px dashed #bbb; border-radius: 6px; padding: 1.5rem; text-align: center; color: #555; }
-  .session-empty button { margin-top: 0.75rem; }
-  .connector-catalog { border: 1px solid #ddd; border-radius: 6px; padding: 0.5rem 0.75rem; margin-bottom: 1rem; }
-  .connector-catalog summary { cursor: pointer; font-weight: bold; padding: 0.25rem 0; }
-  .connector-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 0.75rem; margin-top: 0.5rem; }
-  .connector-card { border: 1px solid #e0e0e0; border-radius: 6px; padding: 0.6rem 0.75rem; background: #fafafa; }
-  .connector-card h4 { margin: 0 0 0.25rem; font-size: 14px; display: flex; align-items: center; gap: 0.4rem; }
-  .connector-card p { margin: 0 0 0.5rem; font-size: 12.5px; color: #555; }
-  .connector-badge { font-size: 11px; padding: 1px 6px; border-radius: 10px; font-weight: normal; }
-  .connector-badge.available { background: #dcf5e0; color: #1a7f37; }
-  .connector-badge.unavailable { background: #fdecea; color: #a33; }
-  .connector-card button { font-size: 12.5px; padding: 0.3rem 0.6rem; }
-  .mode-badge { font-size: 11px; padding: 2px 8px; border-radius: 10px; background: #e8eefc; color: #2563eb; font-weight: bold; margin-left: auto; }
-  .chat-code-block { margin: 0.4rem 0; }
-  .chat-code-block pre { background: #1e1e1e; color: #e6e6e6; padding: 0.5rem 0.6rem; border-radius: 6px; font-size: 12.5px; overflow-x: auto; white-space: pre; margin: 0 0 0.35rem; }
-  .chat-submit-btn { font-size: 12px; padding: 0.25rem 0.55rem; }
-  .table-catalog { border: 1px solid #ddd; border-radius: 6px; padding: 0.5rem 0.75rem; margin-bottom: 1rem; }
-  .table-catalog-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.4rem; }
-  .table-catalog-header strong { font-size: 14px; }
-  .table-catalog-header button { font-size: 12.5px; padding: 0.25rem 0.6rem; }
-  .table-row { border: 1px solid #e0e0e0; border-radius: 6px; padding: 0.5rem 0.65rem; margin-bottom: 0.5rem; background: #fafafa; }
-  .table-row:last-child { margin-bottom: 0; }
-  .table-row-head { display: flex; align-items: center; gap: 0.5rem; }
-  .table-row-head h4 { margin: 0; font-size: 13.5px; }
-  .table-kind-badge { font-size: 10.5px; padding: 1px 6px; border-radius: 10px; background: #e8eefc; color: #2563eb; }
-  .table-columns { font-size: 12px; color: #555; margin: 0.3rem 0 0; }
-  .table-ddl { margin-top: 0.3rem; }
-  .table-ddl summary { cursor: pointer; font-size: 12px; color: #2563eb; }
-  .table-ddl pre { background: #1e1e1e; color: #e6e6e6; padding: 0.5rem 0.6rem; border-radius: 6px; font-size: 12px; overflow-x: auto; white-space: pre; margin: 0.3rem 0 0; }
+
+  .session-bar {
+    display: flex; align-items: center; gap: 0.6rem; margin-bottom: 1rem; background: var(--surface);
+    border: 1px solid var(--border); border-radius: var(--radius); padding: 0.6rem 0.8rem; box-shadow: var(--shadow-sm);
+  }
+  .session-bar label { font-size: 13.5px; color: var(--text-muted); font-weight: 600; }
+  .session-bar select {
+    padding: 0.4rem 0.6rem; font-size: 14px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+    background: var(--surface); color: var(--text);
+  }
+  .session-empty {
+    border: 1px dashed var(--border-strong); border-radius: var(--radius); padding: 2rem 1.5rem; text-align: center;
+    color: var(--text-muted); background: var(--surface);
+  }
+  .session-empty p { max-width: 480px; margin-left: auto; margin-right: auto; }
+  .session-empty button { margin-top: 0.9rem; }
+
+  .panel {
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 0.85rem 1rem; margin-bottom: 1rem; box-shadow: var(--shadow-sm);
+  }
+  .connector-catalog { }
+  .connector-catalog summary { cursor: pointer; font-weight: 700; padding: 0.15rem 0; font-size: 14.5px; }
+  .connector-catalog summary::marker { color: var(--text-faint); }
+  .connector-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 0.7rem; margin-top: 0.75rem; }
+  .connector-card {
+    border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 0.7rem 0.85rem; background: var(--bg);
+    display: flex; flex-direction: column; transition: box-shadow 0.15s, border-color 0.15s;
+  }
+  .connector-card:hover { border-color: var(--border-strong); box-shadow: var(--shadow-sm); }
+  .connector-card h4 { margin: 0 0 0.3rem; font-size: 14px; display: flex; align-items: center; gap: 0.4rem; }
+  .connector-card p { margin: 0 0 0.6rem; font-size: 12.5px; color: var(--text-muted); flex: 1; }
+  .connector-badge { font-size: 10.5px; padding: 2px 7px; border-radius: 20px; font-weight: 600; }
+  .connector-badge.available { background: var(--success-bg); color: var(--success); }
+  .connector-badge.unavailable { background: var(--danger-bg); color: var(--danger); }
+  .connector-card button { align-self: flex-start; }
+
+  .mode-badge {
+    font-size: 11.5px; padding: 3px 10px; border-radius: 20px; background: var(--primary-bg); color: var(--primary);
+    font-weight: 700; margin-left: auto; letter-spacing: 0.01em;
+  }
+
+  .chat-code-block { margin: 0.5rem 0; }
+  .chat-code-block pre {
+    background: #1a1d24; color: #e6e8ee; padding: 0.6rem 0.7rem; border-radius: var(--radius-sm); font-size: 12.5px;
+    overflow-x: auto; white-space: pre; margin: 0 0 0.4rem; font-family: var(--mono);
+  }
+  .chat-submit-btn { font-size: 12px; padding: 0.3rem 0.65rem; }
+
+  .table-catalog-header, .job-catalog-header {
+    display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.6rem;
+  }
+  .table-catalog-header strong, .job-catalog-header strong { font-size: 14.5px; }
+
+  .table-row, .job-row {
+    border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 0.6rem 0.75rem; margin-bottom: 0.55rem;
+    background: var(--bg);
+  }
+  .table-row:last-child, .job-row:last-child { margin-bottom: 0; }
+  .table-row-head, .job-row-head { display: flex; align-items: center; gap: 0.5rem; }
+  .table-row-head h4, .job-row-head h4 { margin: 0; font-size: 13.5px; font-weight: 600; }
+  .table-kind-badge {
+    font-size: 10.5px; padding: 2px 8px; border-radius: 20px; background: var(--primary-bg); color: var(--primary); font-weight: 600;
+  }
+  .table-columns, .job-meta { font-size: 12.5px; color: var(--text-muted); margin: 0.35rem 0 0; font-family: var(--mono); }
+  .table-ddl { margin-top: 0.4rem; }
+  .table-ddl summary { cursor: pointer; font-size: 12.5px; color: var(--primary); }
+  .table-ddl pre {
+    background: #1a1d24; color: #e6e8ee; padding: 0.6rem 0.7rem; border-radius: var(--radius-sm); font-size: 12px;
+    overflow-x: auto; white-space: pre; margin: 0.4rem 0 0; font-family: var(--mono);
+  }
+
   @media (max-width: 900px) {
     body { height: auto; }
     .app-layout { flex-direction: column; }
     .chat-toggle-strip { margin-right: 0; margin-bottom: 0.5rem; }
-    .chat-panel {
-      width: auto; border-right: none; border-bottom: 1px solid #ddd;
-      padding-right: 0; margin-right: 0; padding-bottom: 1rem; height: 420px;
-    }
+    .chat-panel { width: auto; margin-right: 0; margin-bottom: 0.9rem; height: 420px; }
   }
-  .tabs { display: flex; gap: 0.5rem; border-bottom: 2px solid #ddd; margin-bottom: 1rem; }
-  .tab-btn { padding: 0.5rem 1rem; font-size: 14px; cursor: pointer; border: none; background: none; border-bottom: 2px solid transparent; margin-bottom: -2px; }
-  .tab-btn.active { border-bottom-color: #2563eb; font-weight: bold; color: #2563eb; }
+
+  .tabs { display: flex; gap: 0.25rem; border-bottom: 1px solid var(--border); margin-bottom: 1rem; }
+  .tab-btn {
+    padding: 0.55rem 1rem; font-size: 14px; cursor: pointer; border: none; background: none;
+    border-bottom: 2px solid transparent; margin-bottom: -1px; color: var(--text-muted); font-weight: 600; border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+    transition: background 0.15s, color 0.15s;
+  }
+  .tab-btn:hover { background: var(--neutral-bg); color: var(--text); }
+  .tab-btn.active { border-bottom-color: var(--primary); color: var(--primary); background: none; }
   .tab-panel { display: none; }
   .tab-panel.active { display: block; }
-  .cell { border: 1px solid #ddd; border-radius: 6px; padding: 0.75rem; margin-bottom: 1rem; }
-  .cell textarea { width: 100%; height: 100px; font-family: monospace; font-size: 14px; box-sizing: border-box; padding: 0.5rem; }
-  .cell-toolbar { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.5rem; }
-  button { padding: 0.4rem 1rem; font-size: 14px; cursor: pointer; }
-  button.secondary { background: none; border: 1px solid #ccc; }
-  button.remove { margin-left: auto; color: #c0392b; border: none; background: none; cursor: pointer; }
-  .status { font-weight: bold; font-size: 13px; }
-  .PENDING, .RUNNING { color: #b8860b; }
-  .SUCCESS { color: #1a7f37; }
-  .FAILED { color: #c0392b; }
-  .cell-result { margin-top: 0.5rem; }
-  table { border-collapse: collapse; width: 100%; }
-  th, td { border: 1px solid #ccc; padding: 4px 8px; text-align: left; font-size: 14px; }
-  th { background: #f2f2f2; }
-  pre { background: #f6f6f6; padding: 0.75rem; white-space: pre-wrap; margin: 0; }
-  pre.error { background: #fdecea; color: #7a1f1f; }
-  small.hint { color: #666; }
-  .add-cell { margin-top: 0.5rem; }
-  .chat-messages { border: 1px solid #ddd; border-radius: 6px; padding: 0.75rem; flex: 1; min-height: 0; overflow-y: auto; margin-bottom: 0.75rem; background: #fafafa; }
-  .chat-msg { margin-bottom: 0.75rem; }
-  .chat-msg .role { font-weight: bold; font-size: 12px; color: #666; margin-bottom: 2px; }
+
+  .cell {
+    border: 1px solid var(--border); border-radius: var(--radius); padding: 0.85rem; margin-bottom: 1rem;
+    background: var(--surface); box-shadow: var(--shadow-sm);
+  }
+  .cell textarea {
+    width: 100%; height: 100px; font-family: var(--mono); font-size: 13.5px; padding: 0.6rem;
+    border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); color: var(--text);
+    resize: vertical;
+  }
+  .cell textarea:focus { outline: none; border-color: var(--primary); background: var(--surface); }
+  .cell-toolbar { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.6rem; }
+
+  button {
+    padding: 0.45rem 1rem; font-size: 13.5px; cursor: pointer; border-radius: var(--radius-sm); border: 1px solid transparent;
+    background: var(--primary); color: #fff; font-weight: 600; transition: background 0.15s, box-shadow 0.15s, opacity 0.15s;
+  }
+  button:hover { background: var(--primary-hover); }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  button.secondary {
+    background: var(--surface); border: 1px solid var(--border-strong); color: var(--text);
+  }
+  button.secondary:hover { background: var(--neutral-bg); }
+  button.remove {
+    margin-left: auto; color: var(--danger); border: none; background: none; font-weight: 600; padding: 0.45rem 0.6rem;
+  }
+  button.remove:hover { background: var(--danger-bg); }
+  button.submit-job { background: var(--success); border-color: var(--success); }
+  button.submit-job:hover { background: #116632; }
+  button.job-stop { color: var(--danger); border-color: var(--border-strong); }
+  button.job-stop:hover:not(:disabled) { background: var(--danger-bg); border-color: var(--danger); }
+
+  .status {
+    font-weight: 700; font-size: 11.5px; padding: 3px 9px; border-radius: 20px; background: var(--neutral-bg); color: var(--neutral);
+    letter-spacing: 0.02em; white-space: nowrap;
+  }
+  .status.PENDING, .status.RUNNING { background: var(--warning-bg); color: var(--warning); }
+  .status.SUCCESS, .status.FINISHED { background: var(--success-bg); color: var(--success); }
+  .status.FAILED { background: var(--danger-bg); color: var(--danger); }
+  .status.CANCELED { background: var(--neutral-bg); color: var(--neutral); }
+  .status.UNKNOWN { background: var(--danger-bg); color: var(--danger); }
+  .job-row-head .status { margin-left: 0.25rem; }
+  .job-row-head button { margin-left: auto; }
+
+  .cell-result { margin-top: 0.65rem; }
+  table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+  th, td { border: 1px solid var(--border); padding: 6px 10px; text-align: left; }
+  th { background: var(--bg); font-weight: 600; color: var(--text-muted); font-size: 12.5px; text-transform: uppercase; letter-spacing: 0.02em; }
+  tr:nth-child(even) td { background: #fbfbfc; }
+
+  pre { background: var(--bg); padding: 0.75rem; white-space: pre-wrap; margin: 0; border-radius: var(--radius-sm); font-family: var(--mono); font-size: 12.5px; }
+  pre.error { background: var(--danger-bg); color: #7a1f1f; }
+  small.hint { color: var(--text-muted); }
+  .add-cell { margin-top: 0.25rem; }
+
+  .chat-messages {
+    border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 0.75rem; flex: 1; min-height: 0;
+    overflow-y: auto; margin-bottom: 0.75rem; background: var(--bg);
+  }
+  .chat-msg { margin-bottom: 0.85rem; }
+  .chat-msg .role { font-weight: 700; font-size: 11.5px; color: var(--text-faint); margin-bottom: 3px; text-transform: uppercase; letter-spacing: 0.03em; }
   .chat-msg.user { text-align: right; }
-  .chat-msg .bubble { display: inline-block; padding: 0.5rem 0.75rem; border-radius: 10px; max-width: 80%; white-space: pre-wrap; text-align: left; }
-  .chat-msg.user .bubble { background: #2563eb; color: white; }
-  .chat-msg.model .bubble { background: #eee; color: #1a1a1a; }
+  .chat-msg .bubble {
+    display: inline-block; padding: 0.55rem 0.8rem; border-radius: 12px; max-width: 85%; white-space: pre-wrap; text-align: left;
+    font-size: 13.5px; line-height: 1.5;
+  }
+  .chat-msg.user .bubble { background: var(--primary); color: white; border-bottom-right-radius: 4px; }
+  .chat-msg.model .bubble { background: var(--surface); color: var(--text); border: 1px solid var(--border); border-bottom-left-radius: 4px; }
   .chat-input-row { display: flex; gap: 0.5rem; }
-  .chat-input-row textarea { flex: 1; height: 60px; font-family: inherit; font-size: 14px; padding: 0.5rem; box-sizing: border-box; }
-  .chat-toolbar { display: flex; justify-content: flex-end; margin-bottom: 0.5rem; }
+  .chat-input-row textarea {
+    flex: 1; height: 60px; font-family: inherit; font-size: 13.5px; padding: 0.55rem; border: 1px solid var(--border);
+    border-radius: var(--radius-sm); background: var(--bg); color: var(--text); resize: vertical;
+  }
+  .chat-input-row textarea:focus { outline: none; border-color: var(--primary); background: var(--surface); }
+  .chat-toolbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.65rem; gap: 0.5rem; }
+  .chat-toolbar label { font-weight: 500; color: var(--text-muted); }
 </style>
 </head>
 <body>
-  <h1>PyFlink Notebook</h1>
+  <h1><span class="app-icon">&#9889;</span>PyFlink Notebook</h1>
   <p class="subtitle"><small class="hint">
     Notebook SQL/Python butuh SESSION dulu -- tiap session punya TableEnvironment sendiri, jadi tabel/state satu session tidak bocor ke session lain.
     Di dalam satu session, tab SQL dan tab Python tetap berbagi TableEnvironment yang sama (<code>t_env</code>) -- tabel yang dibuat di satu tab bisa langsung dipakai di tab lain.
@@ -122,6 +253,10 @@
         Ngobrol bebas ke Gemini. Percakapan diingat (multi-turn) selama server ini hidup.
       </small></p>
       <div class="chat-toolbar">
+        <label style="display:flex;align-items:center;gap:0.3rem;font-size:12.5px;color:#555;font-weight:normal;">
+          <input type="checkbox" id="chat-grounded-toggle" />
+          Generate SQL (grounded ke session aktif)
+        </label>
         <button class="secondary" id="chat-reset">Reset percakapan</button>
       </div>
       <div class="chat-messages" id="chat-messages"></div>
@@ -137,13 +272,13 @@
         <select id="session-select"></select>
         <button class="secondary" id="session-new">+ Session baru</button>
         <button class="secondary" id="session-delete">Hapus session</button>
-        <span class="mode-badge" title="Tiap session pakai TableEnvironment mode streaming (EnvironmentSettings.in_streaming_mode()) -- agregat (COUNT/SUM/dst) bisa muncul sebagai baris update/retraction, bukan cuma satu baris hasil akhir seperti mode batch.">&#9889; Streaming Job Mode</span>
+        <span class="mode-badge" id="session-mode-badge" title="Mode TableEnvironment session ini -- ditentukan sekali saat session dibuat, tidak bisa diganti di tengah jalan.">&#9889; Streaming</span>
       </div>
 
       <div id="session-empty" class="session-empty">
         <p>Belum ada session aktif. Notebook SQL/Python butuh session dulu -- tiap session punya TableEnvironment sendiri (tabel/state tidak bocor ke session lain).</p>
         <p><small class="hint">Jumlah session aktif dibatasi di server -- kalau sudah penuh, hapus session lama dulu.</small></p>
-        <p><small class="hint">Semua session berjalan di <strong>Streaming Job Mode</strong> -- bukan batch, jadi hasil agregat (COUNT/SUM/dst) bisa berupa baris update/retraction, bukan satu baris hasil akhir.</small></p>
+        <p><small class="hint">Tiap session pilih mode sendiri saat dibuat: <strong>Streaming</strong> (default -- agregat seperti COUNT/SUM bisa muncul sebagai baris update/retraction) atau <strong>Batch</strong> (data dianggap sudah lengkap, dihitung sekali sampai selesai). Tidak bisa diganti setelah session dibuat.</small></p>
         <button id="session-empty-create">Buat session pertama</button>
       </div>
 
@@ -153,7 +288,7 @@
           <button class="tab-btn" data-tab="python">Python Notebook</button>
         </div>
 
-        <div class="table-catalog" id="table-catalog">
+        <div class="table-catalog panel" id="table-catalog">
           <div class="table-catalog-header">
             <strong>Tabel di session ini</strong>
             <button class="secondary" id="table-refresh">Refresh</button>
@@ -163,8 +298,22 @@
           </div>
         </div>
 
+        <div class="job-catalog panel" id="job-catalog">
+          <div class="job-catalog-header">
+            <strong>Background Jobs</strong>
+            <button class="secondary" id="job-refresh">Refresh</button>
+          </div>
+          <p><small class="hint">
+            Job di sini disubmit dari cell SQL (tombol "Submit Job") dan jalan SELAMANYA di background, beda dengan Run biasa yang berhenti begitu hasilnya selesai/preview.
+            <strong>Tapi ini masih proses embedded</strong> -- kalau server uvicorn ini mati/di-restart, SEMUA job di bawah ikut mati. Ini BUKAN Flink session cluster beneran (lihat README.md untuk rencana Dinky + Flink cluster ke depannya).
+          </small></p>
+          <div class="job-list" id="job-list">
+            <p><small class="hint">Belum ada background job di session ini.</small></p>
+          </div>
+        </div>
+
         <div id="tab-sql" class="tab-panel active">
-          <details class="connector-catalog" id="connector-catalog" open>
+          <details class="connector-catalog panel" id="connector-catalog" open>
             <summary>Daftar connector yang tersedia</summary>
             <div class="connector-list" id="connector-list"></div>
           </details>
@@ -212,6 +361,7 @@
         <textarea placeholder="${config.placeholder}">${initialText || ""}</textarea>
         <div class="cell-toolbar">
           <button class="run">Run</button>
+          ${config.allowSubmitJob ? '<button class="secondary submit-job" title="Submit sebagai job yang jalan SELAMANYA di background (beda dari Run biasa)">Submit Job</button>' : ""}
           <span class="status"></span>
           <button class="remove" title="Hapus cell">Hapus</button>
         </div>
@@ -273,6 +423,52 @@
         cellEl.remove();
       });
 
+      // "Submit Job" cuma ada di cell SQL (config.allowSubmitJob) -- lihat
+      // background_jobs.py untuk kenapa ini dibatasi ke SQL (INSERT INTO)
+      // dan tidak untuk cell Python (loop exec() tidak punya cancel yang aman).
+      const submitJobBtn = cellEl.querySelector(".submit-job");
+      if (submitJobBtn) {
+        submitJobBtn.addEventListener("click", async () => {
+          if (!currentSessionId) {
+            alert("Buat/pilih session dulu sebelum submit job.");
+            return;
+          }
+          if (!textarea.value.trim()) {
+            alert("Cell masih kosong.");
+            return;
+          }
+          const name = prompt(
+            "Nama job (misal: kafka-ke-postgres, wordcount-live):",
+            "job-" + Date.now()
+          );
+          if (name === null) return;
+          const trimmed = name.trim();
+          if (!trimmed) return;
+
+          submitJobBtn.disabled = true;
+          try {
+            const res = await fetch("/sessions/" + currentSessionId + "/background-jobs", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ sql: textarea.value, name: trimmed }),
+            });
+            const data = await res.json();
+            if (!res.ok) {
+              alert(data.detail || "Gagal submit job");
+              return;
+            }
+            if (data.status === "FAILED") {
+              alert(`Job "${data.name}" gagal disubmit:\n\n${data.error || "(tidak ada pesan error)"}`);
+            } else {
+              alert(`Job "${data.name}" disubmit (Flink Job ID: ${data.flink_job_id || "-"}). Lihat panel "Background Jobs" di bawah.`);
+            }
+            refreshJobList();
+          } finally {
+            submitJobBtn.disabled = false;
+          }
+        });
+      }
+
       return cellEl;
     }
 
@@ -286,6 +482,7 @@
       jobsUrl: (id) => "/sessions/" + currentSessionId + "/jobs/" + id,
       buildPayload: (text) => ({ sql: text }),
       placeholder: "Tulis SQL di sini, pisahkan statement dengan ;",
+      allowSubmitJob: true,
       renderResult(job, resultEl) {
         if (job.status === "FAILED") {
           resultEl.innerHTML = "<pre class='error'>" + escapeHtml(job.error || "(tidak ada pesan error)") + "</pre>";
@@ -360,7 +557,7 @@
       for (const s of sessions) {
         const opt = document.createElement("option");
         opt.value = s.id;
-        opt.textContent = s.name;
+        opt.textContent = s.name + (s.mode === "batch" ? " (batch)" : "");
         select.appendChild(opt);
       }
       if (currentSessionId) select.value = currentSessionId;
@@ -371,6 +568,11 @@
       document.getElementById("notebook-area").classList.toggle("hidden", !currentSessionId);
       document.getElementById("session-delete").disabled = !currentSessionId;
       document.getElementById("session-select").disabled = sessions.length === 0;
+
+      const badge = document.getElementById("session-mode-badge");
+      const current = sessions.find((s) => s.id === currentSessionId);
+      const mode = current ? current.mode : "streaming";
+      badge.textContent = mode === "batch" ? "⏸ Batch" : "⚡ Streaming";
     }
 
     function clearCells() {
@@ -394,6 +596,7 @@ print(df)`);
       updateSessionUI();
       seedExampleCells();
       refreshTableList();
+      refreshJobList();
     }
 
     async function createSession() {
@@ -402,10 +605,18 @@ print(df)`);
       const trimmed = name.trim();
       if (!trimmed) return;
 
+      const modeInput = prompt(
+        "Mode session -- ketik 'batch' atau biarkan default 'streaming':\n" +
+          "(Streaming: cocok untuk source yang terus mengalir seperti Kafka. Batch: data dianggap sudah lengkap, dihitung sekali sampai selesai -- cocok untuk backfill/testing.)",
+        "streaming"
+      );
+      if (modeInput === null) return;
+      const mode = modeInput.trim().toLowerCase() === "batch" ? "batch" : "streaming";
+
       const res = await fetch("/sessions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: trimmed }),
+        body: JSON.stringify({ name: trimmed, mode }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -536,6 +747,75 @@ print(df)`);
 
     document.getElementById("table-refresh").addEventListener("click", refreshTableList);
 
+    // --- Panel "Background Jobs" ---
+    // Job di sini disubmit lewat tombol "Submit Job" di cell SQL (lihat
+    // addCell()) -- beda dari job notebook biasa (sql-cells), job ini
+    // dimaksudkan jalan SELAMANYA sampai di-Stop manual atau proses uvicorn
+    // mati. Di-poll berkala (bukan cuma refresh manual) karena statusnya
+    // bisa berubah sendiri (misal job unbounded yang tiba-tiba FAILED)
+    // tanpa ada aksi user di browser ini.
+    async function refreshJobList() {
+      const listEl = document.getElementById("job-list");
+      if (!currentSessionId) {
+        listEl.innerHTML = '<p><small class="hint">Belum ada background job di session ini.</small></p>';
+        return;
+      }
+
+      try {
+        const res = await fetch("/sessions/" + currentSessionId + "/background-jobs");
+        if (!res.ok) throw new Error((await res.json()).detail || "Gagal memuat daftar job");
+        const jobs = await res.json();
+
+        if (!jobs.length) {
+          listEl.innerHTML = '<p><small class="hint">Belum ada background job di session ini.</small></p>';
+          return;
+        }
+
+        listEl.innerHTML = "";
+        for (const j of jobs) {
+          const row = document.createElement("div");
+          row.className = "job-row";
+          const canStop = j.status === "RUNNING";
+          const submittedText = new Date(j.submitted_at * 1000).toLocaleString();
+          row.innerHTML = `
+            <div class="job-row-head">
+              <h4>${escapeHtml(j.name)}</h4>
+              <span class="status ${j.status}">${j.status}</span>
+              <button class="secondary job-stop" ${canStop ? "" : "disabled"}>Stop</button>
+            </div>
+            <p class="job-meta">Flink Job ID: ${escapeHtml(j.flink_job_id || "-")} -- disubmit ${submittedText}</p>
+            ${j.error ? `<pre class="error">${escapeHtml(j.error)}</pre>` : ""}
+            <details class="table-ddl"><summary>Lihat SQL</summary><pre>${escapeHtml(j.sql)}</pre></details>
+          `;
+          const stopBtn = row.querySelector(".job-stop");
+          if (canStop) {
+            stopBtn.addEventListener("click", async () => {
+              if (!confirm(`Stop job "${j.name}"? Ini nge-cancel job Flink-nya (job_client.cancel()) -- tidak bisa dilanjutkan lagi, harus Submit Job ulang.`)) return;
+              stopBtn.disabled = true;
+              try {
+                const stopRes = await fetch(
+                  "/sessions/" + currentSessionId + "/background-jobs/" + j.id + "/stop",
+                  { method: "POST" }
+                );
+                if (!stopRes.ok) {
+                  const err = await stopRes.json();
+                  alert(err.detail || "Gagal stop job");
+                }
+              } finally {
+                refreshJobList();
+              }
+            });
+          }
+          listEl.appendChild(row);
+        }
+      } catch (e) {
+        listEl.innerHTML = `<p><small class="hint">Gagal memuat daftar job: ${escapeHtml(e.message)}</small></p>`;
+      }
+    }
+
+    document.getElementById("job-refresh").addEventListener("click", refreshJobList);
+    setInterval(() => { if (currentSessionId) refreshJobList(); }, 4000);
+
     // --- Toggle panel LLM Chat ---
     const chatPanelEl = document.getElementById("chat-panel");
     const chatToggleBtn = document.getElementById("chat-toggle");
@@ -629,16 +909,33 @@ print(df)`);
       for (const msg of history) renderChatMessage(msg.role, msg.text);
     }
 
+    // Toggle "Generate SQL (grounded)": kalau aktif, pesan dikirim ke
+    // /sessions/{id}/generate-sql (agent dengan tools describe_table/preview_rows
+    // yang beneran baca skema session aktif -- lihat llm_runner.generate_sql())
+    // alih-alih /chat (chat bebas biasa, tidak tahu session). Balasannya
+    // dirender lewat jalur code-block yang SAMA dengan fence-detection biasa,
+    // jadi tombol "Kirim ke SQL Notebook" otomatis ada juga di sini.
+    const chatGroundedToggle = document.getElementById("chat-grounded-toggle");
+
     async function sendChat() {
       const text = chatInputEl.value.trim();
       if (!text) return;
+      const grounded = chatGroundedToggle.checked;
+
+      if (grounded && !currentSessionId) {
+        alert("Buat/pilih session dulu sebelum pakai mode Generate SQL (grounded).");
+        return;
+      }
+
       chatInputEl.value = "";
       chatSendBtn.disabled = true;
       renderChatMessage("user", text);
       const thinkingEl = renderChatMessage("model", "...");
 
+      const url = grounded ? "/sessions/" + currentSessionId + "/generate-sql" : "/chat";
+
       try {
-        const res = await fetch("/chat", {
+        const res = await fetch(url, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ message: text }),
@@ -646,7 +943,7 @@ print(df)`);
         const data = await res.json();
         const bubbleEl = thinkingEl.querySelector(".bubble");
         if (res.ok) {
-          renderBubbleContent(bubbleEl, data.reply);
+          renderBubbleContent(bubbleEl, grounded ? "```sql\n" + data.sql + "\n```" : data.reply);
         } else {
           bubbleEl.textContent = "Error: " + (data.detail || "Request gagal");
         }

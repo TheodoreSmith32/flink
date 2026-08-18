@@ -39,6 +39,11 @@ SESSION_LIMIT = 5
 class Session:
     id: str
     name: str
+    # "streaming" (default) atau "batch" -- menentukan EnvironmentSettings yang dipakai
+    # saat session.env dibuat lazy di get_env(). Tidak bisa diganti setelah session.env
+    # dibuat (TableEnvironment tidak bisa ganti mode di tengah jalan) -- kalau butuh mode
+    # lain, buat session baru.
+    mode: str = "streaming"
     created_at: float = field(default_factory=time.time)
     # Lock per-session (bukan satu lock global) -- job di session A tidak
     # perlu nunggu job di session B, karena keduanya pegang TableEnvironment
@@ -47,6 +52,10 @@ class Session:
     env: TableEnvironment | None = field(default=None, repr=False)
     sql_jobs: dict = field(default_factory=dict)
     py_jobs: dict = field(default_factory=dict)
+    # Job Flink yang dimaksudkan jalan SELAMANYA di background (lihat
+    # background_jobs.py) -- berbeda dari sql_jobs/py_jobs di atas yang
+    # statusnya cepat selesai.
+    background_jobs: dict = field(default_factory=dict)
     # Namespace exec() buat notebook Python, persist antar cell -- lihat
     # python_runner.py. None sampai cell Python pertama di session ini jalan.
     py_globals: dict | None = field(default=None, repr=False)
@@ -56,13 +65,15 @@ _SESSIONS: dict[str, Session] = {}
 _SESSIONS_LOCK = threading.Lock()
 
 
-def create_session(name: str) -> Session:
+def create_session(name: str, mode: str = "streaming") -> Session:
+    if mode not in ("streaming", "batch"):
+        raise ValueError("mode harus 'streaming' atau 'batch'")
     with _SESSIONS_LOCK:
         if len(_SESSIONS) >= SESSION_LIMIT:
             raise ValueError(
                 f"Maksimal {SESSION_LIMIT} session aktif sekaligus. Hapus session lama dulu."
             )
-        session = Session(id=str(uuid.uuid4()), name=name)
+        session = Session(id=str(uuid.uuid4()), name=name, mode=mode)
         _SESSIONS[session.id] = session
         return session
 
@@ -86,7 +97,12 @@ def get_env(session: Session) -> TableEnvironment:
     flink_runner.py dan python_runner.py supaya keduanya berbagi env yang
     sama di dalam satu session -- tapi tidak pernah dengan session lain."""
     if session.env is None:
-        session.env = TableEnvironment.create(EnvironmentSettings.in_streaming_mode())
+        settings = (
+            EnvironmentSettings.in_batch_mode()
+            if session.mode == "batch"
+            else EnvironmentSettings.in_streaming_mode()
+        )
+        session.env = TableEnvironment.create(settings)
         # Daftarkan connector Kafka dari awal, sama seperti di
         # hello_flink_kafka.py, biar session ini juga bisa CREATE TABLE
         # ... WITH ('connector'='kafka', ...) tanpa langkah tambahan.
