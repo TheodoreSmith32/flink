@@ -41,11 +41,14 @@ berikutnya:
 ```
 .
 ├── api/                          # Service notebook (FastAPI + UI web)
-│   ├── main.py                   # Endpoint FastAPI (jobs, py-jobs, chat)
-│   ├── flink_runner.py           # Eksekusi job SQL, TableEnvironment bersama
-│   ├── python_runner.py          # Eksekusi cell Python (exec), state persist
-│   ├── llm_runner.py             # Chat ke Gemini (google-genai)
-│   └── static/index.html         # UI notebook (tab SQL/Python/LLM Chat)
+│   ├── main.py                   # Endpoint FastAPI (sessions, jobs, py-jobs, background-jobs, chat)
+│   ├── session_manager.py        # Session Manager -- TableEnvironment terisolasi per session
+│   ├── flink_runner.py           # Eksekusi job SQL notebook, list/describe table
+│   ├── python_runner.py          # Eksekusi cell Python (exec), state persist per session
+│   ├── background_jobs.py        # "Submit Job" -- job INSERT INTO yang jalan selamanya di background
+│   ├── llm_runner.py             # Chat ke Gemini (google-genai) + agent generate-SQL
+│   ├── connectors.py             # Katalog connector siap-pakai (template CREATE TABLE)
+│   └── static/index.html         # UI notebook (Session bar, tab SQL/Python, LLM Chat, Background Jobs)
 ├── data/                         # Data contoh + hasil output sink/CSV
 │   └── kalimat.csv               # Source data untuk hello_flink_file.py
 ├── jars/                         # JAR connector tambahan
@@ -539,6 +542,85 @@ GEMINI_MODEL=gemini-flash-latest
 ```
 Bikin API key di https://aistudio.google.com/apikey kalau belum punya.
 
+#### Session Manager -- multi-session, mode batch/streaming
+
+Sebelum bisa pakai tab SQL/Python, user harus bikin (atau pilih) **session**
+dulu lewat panel di atas notebook (`api/session_manager.py`). Ini beda dari
+desain awal yang cuma punya SATU `TableEnvironment` untuk seluruh proses
+FastAPI (semua tab/user berbagi state yang sama):
+
+- Tiap session punya `TableEnvironment`, job history (SQL & Python), dan
+  namespace Python **sendiri-sendiri** -- tabel yang dibuat di session A
+  TIDAK PERNAH kelihatan dari session B. Sudah dites langsung: bikin tabel di
+  satu session, query dari session lain, hasilnya kosong.
+- Tab SQL dan tab Python DALAM SATU session tetap berbagi `TableEnvironment`
+  yang sama seperti sebelumnya.
+- **Mode dipilih saat bikin session**: `streaming` (default,
+  `EnvironmentSettings.in_streaming_mode()`) atau `batch`
+  (`in_batch_mode()`). Tidak bisa diganti setelah session dibuat -- kalau
+  butuh mode lain, buat session baru. Batch cocok buat backfill/testing data
+  historis; hasil agregat (COUNT/SUM/dst) langsung satu baris final, tidak
+  ada baris update/retraction seperti streaming.
+- Jumlah session aktif dibatasi (`SESSION_LIMIT` di `session_manager.py`,
+  default 5) -- tiap session pegang `TableEnvironment` (resource Flink)
+  sendiri, jadi tidak boleh dibuat tanpa batas.
+- Panel **"Tabel di session ini"** nampilin semua table/view + kolom + DDL
+  asli (lewat `SHOW CREATE TABLE`/`VIEW`) di session yang aktif, auto-refresh
+  tiap ada cell yang sukses.
+- Panel **"Daftar connector yang tersedia"** (`api/connectors.py`) nampilin
+  connector siap-pakai (datagen, filesystem, print, blackhole, Kafka) dengan
+  template `CREATE TABLE` yang tinggal diklik jadi cell baru.
+
+#### Submit Job -- job Flink yang jalan SELAMANYA di background
+
+Cell SQL biasa (tombol **Run**) itu buat coba-coba: begitu hasilnya
+selesai/preview, jobnya berhenti. Kadang butuh sebaliknya -- misal
+`INSERT INTO ... SELECT` dari Kafka yang memang harus terus jalan. Tombol
+**Submit Job** (`api/background_jobs.py`) buat itu:
+
+- Statement `INSERT INTO` di cell disubmit TANPA `.wait()` -- job-nya jalan
+  di belakang layar selamanya, tidak menggantung request/cell manapun.
+- Setiap job dapat **Flink Job ID asli** dan bisa dicek statusnya
+  (`RUNNING`/`FINISHED`/`FAILED`/`CANCELED`) lewat `TableResult.get_job_client()`
+  bawaan Flink -- mekanisme yang sama dipakai Flink Web UI/JobManager
+  sungguhan, cuma di sini ditampilkan di panel **"Background Jobs"**
+  (auto-refresh tiap 4 detik) dengan tombol **Stop**.
+- Kalau satu cell isi **lebih dari satu** `INSERT INTO`, semuanya digabung
+  jadi **SATU job** lewat `t_env.create_statement_set()` -- berbagi
+  pembacaan source yang sama, bukan jadi job terpisah sendiri-sendiri.
+- Sengaja dibatasi ke cell SQL saja, TIDAK untuk cell Python: loop Python
+  (`while True: ...` lewat `exec()`) tidak punya mekanisme cancel yang aman
+  seperti `job_client.cancel()`.
+- **Temuan penting (dites langsung pakai PyFlink asli):** tiap job `INSERT`
+  ternyata jalan di **MiniCluster-nya sendiri-sendiri** (bukan satu cluster
+  dibagi rata per session). Begitu job berhenti (termasuk karena di-cancel),
+  MiniCluster job itu ikut mati, dan `get_job_status()` sesudahnya SELALU
+  gagal dengan `IllegalStateException: MiniCluster ... already shut down`.
+  Job lain yang masih `RUNNING` di session yang sama tidak terpengaruh sama
+  sekali. Makanya `stop()` langsung nandain status `CANCELED` begitu
+  `cancel()` sukses, BUKAN nge-query ulang ke cluster yang sudah tutup.
+- **Keterbatasan yang jujur perlu diketahui**: ini masih proses embedded --
+  kalau `uvicorn` mati/di-restart, SEMUA background job ikut mati. Bukan
+  Flink session cluster beneran (lihat [Langkah Berikutnya](#langkah-berikutnya)).
+
+#### Generate SQL (grounded) -- agent LLM yang beneran baca skema session
+
+Selain fence-detection biasa di LLM Chat (blok ` ```sql `/` ```python ` dapat
+tombol "Kirim ke Notebook"), ada mode kedua: checkbox **"Generate SQL
+(grounded ke session aktif)"**. Bedanya dengan chat bebas:
+
+- Ini **agent ringan** (bukan chat biasa) -- `llm_runner.generate_sql()`
+  pakai native function-calling `google-genai` dengan dua tools READ-ONLY
+  yang nempel ke `TableEnvironment` session yang aktif:
+  `describe_table(name)` (lihat daftar tabel atau skema+DDL satu tabel) dan
+  `preview_rows(sql, limit)` (jalankan SELECT terbatas, lihat contoh data
+  asli). Model dipaksa PAKAI tools ini dulu sebelum jawab, bukan menebak
+  nama tabel/kolom dari instruksi umum.
+- Tidak ada tool buat `INSERT`/`CREATE`/`DROP` -- agent ini cuma bisa
+  MEMBACA, tidak pernah bisa mengubah session dengan sendirinya.
+- Hasilnya tetap cuma disisipkan sebagai cell baru (lewat jalur render yang
+  sama dengan fence-detection) -- user tetap harus klik Run sendiri.
+
 ## Istilah Penting
 
 | Istilah | Arti singkat |
@@ -557,6 +639,10 @@ Bikin API key di https://aistudio.google.com/apikey kalau belum punya.
 | **Notebook (di `api/`)** | Beberapa cell SQL yang berbagi satu `TableEnvironment` yang sama, jadi tabel yang dibuat di satu cell tetap bisa dipakai di cell lain — beda dengan versi awal `api/` yang bikin `TableEnvironment` baru tiap job. |
 | **Preview (row limit)** | Pembatasan jumlah baris yang ditarik dari SELECT (`PREVIEW_ROW_LIMIT` di `flink_runner.py`) supaya SELECT dari source unbounded tidak menggantung selamanya dan tidak nge-block job lain di notebook yang sama. |
 | **`exec()`** | Fungsi Python bawaan buat menjalankan string kode Python. Dipakai di `python_runner.py` untuk mengeksekusi isi cell tab Python — ini yang bikin kode APAPUN bisa dijalankan (lihat peringatan keamanan di [Tab Python](#tab-python-di-api--notebook-kode-bukan-cuma-sql)). |
+| **Session** | Satu "kernel" notebook sendiri-sendiri (mirip kernel Jupyter) -- punya `TableEnvironment`, job history, dan namespace Python sendiri, terisolasi dari session lain. Lihat [Session Manager](#session-manager----multi-session-mode-batchstreaming). |
+| **`JobClient`** | Objek dari Flink yang didapat lewat `TableResult.get_job_client()` setelah `execute_sql()` sebuah `INSERT` -- punya Job ID asli, `get_job_status()`, dan `cancel()`. Ada walau masih embedded/tanpa cluster beneran; ini yang dipakai fitur [Submit Job](#submit-job----job-flink-yang-jalan-selamanya-di-background). |
+| **`StatementSet`** | `t_env.create_statement_set()` -- cara menggabungkan beberapa `INSERT INTO` jadi SATU job Flink yang berbagi pembacaan source, bukan job terpisah sendiri-sendiri. |
+| **MiniCluster per job** | Temuan lewat testing: tiap statement `INSERT` yang dieksekusi di mode embedded ini jalan di MiniCluster-nya SENDIRI, bukan berbagi satu cluster per session/proses. Begitu job itu berhenti (selesai/gagal/cancel), MiniCluster-nya ikut mati dan tidak bisa dicek statusnya lagi -- job lain tidak terpengaruh. |
 
 ## Langkah Berikutnya
 
@@ -573,26 +659,40 @@ Urutan yang direkomendasikan dari sini:
    Notebook") — dikerjakan di luar urutan juga, karena kebutuhannya
    (variabel/logic Python, bukan cuma SQL) muncul begitu tabel yang dibuat
    lewat CLI script dan lewat UI ternyata tidak nyambung satu sama lain.
-7. **Event time & watermark** — konsep inti streaming yang belum
+7. ~~Session Manager~~ ✅ (`api/session_manager.py`) — multi-session dengan
+   `TableEnvironment` terisolasi, mode batch/streaming dipilih per session.
+8. ~~Submit Job / background jobs~~ ✅ (`api/background_jobs.py`) — job
+   `INSERT INTO` bisa disubmit jalan selamanya di background, dilacak +
+   bisa di-Stop lewat `JobClient` bawaan Flink.
+9. ~~Generate SQL (grounded)~~ ✅ (`llm_runner.generate_sql()`) — agent LLM
+   ringan dengan tools `describe_table`/`preview_rows` yang beneran baca
+   skema session aktif, bukan menebak.
+10. **Event time & watermark** — konsep inti streaming yang belum
    tersentuh sama sekali di contoh sekarang (source Kafka di atas masih
    pakai processing time, bukan event time dari pesannya sendiri). Ini
    kunci untuk paham kenapa Flink beda dari batch biasa saat datanya
    benar-benar tidak pernah berhenti.
-8. **Windowing** (tumbling/sliding window) — begitu ada event time,
+11. **Windowing** (tumbling/sliding window) — begitu ada event time,
    agregasi per interval waktu (per menit/jam) jadi langkah lanjutan
    yang wajar. Cocok dicoba di atas topic Kafka yang sudah bisa dibaca.
-9. **Format pesan Kafka** — kalau skema pesan di `topic_kafka` sudah
+12. **Format pesan Kafka** — kalau skema pesan di `topic_kafka` sudah
    diketahui (misal JSON), ganti `format = 'raw'` di
    `hello_flink_kafka.py` jadi `'json'` biar field-fieldnya otomatis jadi
    kolom terpisah, bukan satu string mentah.
-10. **Python UDF** — begitu logic makin kompleks (misal split kata
+13. **Python UDF** — begitu logic makin kompleks (misal split kata
     langsung di SQL, bukan ditarik ke Python dulu seperti sekarang), UDF
     jadi diperlukan.
-11. **Job history persisten** — sekarang daftar job di `api/` hilang
-    begitu server FastAPI di-restart (disimpan di dictionary Python biasa).
-    Langkah lanjutan yang wajar: simpan ke SQLite biar job history tetap
-    ada, atau connect ke **Flink session cluster** beneran (lewat setup
-    **Dinky + Flink** di `template.env`) biar job tetap jalan walau server
-    API-nya mati.
+14. **Job history persisten & Flink session cluster beneran** — sekarang
+    daftar job di `api/` hilang begitu server FastAPI di-restart (disimpan
+    di dictionary Python biasa), dan TIDAK ADA Flink Web UI/dashboard sama
+    sekali di mode embedded ini (sudah dites langsung: `rest.port` gak
+    kebuka apapun, karena tiap job punya MiniCluster sendiri -- lihat
+    catatan di [Submit Job](#submit-job----job-flink-yang-jalan-selamanya-di-background)).
+    Sengaja BELUM dikerjakan untuk prototipe ini (nambah kompleksitas
+    operasional -- Docker/proses terpisah -- yang berisiko pas demo live).
+    Langkah lanjutan kalau dibutuhkan: simpan job history ke SQLite biar
+    persisten, atau connect ke **Flink session cluster** beneran (lewat
+    setup **Dinky + Flink** di `template.env`) biar dapat dashboard visual
+    dan job tetap jalan walau server API-nya mati.
 
 <!-- Generated by readme-generator skill -->
