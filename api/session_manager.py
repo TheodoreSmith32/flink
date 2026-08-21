@@ -56,6 +56,10 @@ class Session:
     # background_jobs.py) -- berbeda dari sql_jobs/py_jobs di atas yang
     # statusnya cepat selesai.
     background_jobs: dict = field(default_factory=dict)
+    # Cell Python yang dimaksudkan jalan SELAMANYA di background thread
+    # (lihat python_background_jobs.py) -- analog background_jobs di atas,
+    # tapi mekanisme stop-nya kooperatif (bukan cancel() yang dijamin Flink).
+    python_background_jobs: dict = field(default_factory=dict)
     # Namespace exec() buat notebook Python, persist antar cell -- lihat
     # python_runner.py. None sampai cell Python pertama di session ini jalan.
     py_globals: dict | None = field(default=None, repr=False)
@@ -103,10 +107,22 @@ def get_env(session: Session) -> TableEnvironment:
             else EnvironmentSettings.in_streaming_mode()
         )
         session.env = TableEnvironment.create(settings)
-        # Daftarkan connector Kafka dari awal, sama seperti di
-        # hello_flink_kafka.py, biar session ini juga bisa CREATE TABLE
-        # ... WITH ('connector'='kafka', ...) tanpa langkah tambahan.
-        jar_path = os.path.join(PROJECT_DIR, "jars", "flink-sql-connector-kafka-1.17.2.jar")
-        if os.path.exists(jar_path):
-            session.env.get_config().set("pipeline.jars", f"file://{jar_path}")
+        # Daftarkan semua connector JAR yang tersedia dari awal (kafka,
+        # jdbc + driver MySQL) sama seperti di hello_flink_kafka.py, biar
+        # session ini bisa langsung CREATE TABLE ... WITH ('connector'=...)
+        # tanpa langkah tambahan -- lihat api/connectors.py untuk daftar
+        # connector & jar yang dicek availability-nya. Kafka & upsert-kafka
+        # pakai jar yang sama; jdbc butuh connector jar + driver jar
+        # sekaligus (dua-duanya harus ada baru didaftarkan).
+        jar_names = [
+            "flink-sql-connector-kafka-1.17.2.jar",
+            "flink-connector-jdbc-3.1.2-1.17.jar",
+            "mysql-connector-j-8.0.33.jar",
+        ]
+        jar_paths = [os.path.join(PROJECT_DIR, "jars", name) for name in jar_names]
+        existing_jars = [p for p in jar_paths if os.path.exists(p)]
+        if existing_jars:
+            session.env.get_config().set(
+                "pipeline.jars", ";".join(f"file://{p}" for p in existing_jars)
+            )
     return session.env

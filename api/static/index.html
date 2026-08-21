@@ -304,7 +304,8 @@
             <button class="secondary" id="job-refresh">Refresh</button>
           </div>
           <p><small class="hint">
-            Job di sini disubmit dari cell SQL (tombol "Submit Job") dan jalan SELAMANYA di background, beda dengan Run biasa yang berhenti begitu hasilnya selesai/preview.
+            Job di sini disubmit dari cell SQL ATAU Python (tombol "Submit Job") dan jalan SELAMANYA di background, beda dengan Run biasa yang berhenti begitu hasilnya selesai/preview.
+            Job <strong>SQL</strong> di-Stop lewat Flink <code>job_client.cancel()</code> yang terjamin berhenti. Job <strong>Python</strong> di-Stop cuma REQUEST kooperatif lewat <code>stop_event</code> -- kalau kode cell-nya tidak mengecek itu di loop-nya, job akan tetap jalan walau sudah di-Stop.
             <strong>Tapi ini masih proses embedded</strong> -- kalau server uvicorn ini mati/di-restart, SEMUA job di bawah ikut mati. Ini BUKAN Flink session cluster beneran (lihat README.md untuk rencana Dinky + Flink cluster ke depannya).
           </small></p>
           <div class="job-list" id="job-list">
@@ -423,9 +424,11 @@
         cellEl.remove();
       });
 
-      // "Submit Job" cuma ada di cell SQL (config.allowSubmitJob) -- lihat
-      // background_jobs.py untuk kenapa ini dibatasi ke SQL (INSERT INTO)
-      // dan tidak untuk cell Python (loop exec() tidak punya cancel yang aman).
+      // "Submit Job" ada di cell SQL DAN Python, tapi lewat endpoint & mekanisme
+      // stop yang beda (lihat config.backgroundJobUrl/buildBackgroundPayload/
+      // submitJobConfirm di sqlConfig/pythonConfig) -- SQL di-cancel terjamin
+      // lewat Flink job_client.cancel() (background_jobs.py), Python cuma
+      // request kooperatif lewat stop_event (python_background_jobs.py).
       const submitJobBtn = cellEl.querySelector(".submit-job");
       if (submitJobBtn) {
         submitJobBtn.addEventListener("click", async () => {
@@ -437,6 +440,8 @@
             alert("Cell masih kosong.");
             return;
           }
+          if (config.submitJobConfirm && !confirm(config.submitJobConfirm)) return;
+
           const name = prompt(
             "Nama job (misal: kafka-ke-postgres, wordcount-live):",
             "job-" + Date.now()
@@ -447,10 +452,10 @@
 
           submitJobBtn.disabled = true;
           try {
-            const res = await fetch("/sessions/" + currentSessionId + "/background-jobs", {
+            const res = await fetch(config.backgroundJobUrl(), {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ sql: textarea.value, name: trimmed }),
+              body: JSON.stringify(config.buildBackgroundPayload(textarea.value, trimmed)),
             });
             const data = await res.json();
             if (!res.ok) {
@@ -460,7 +465,7 @@
             if (data.status === "FAILED") {
               alert(`Job "${data.name}" gagal disubmit:\n\n${data.error || "(tidak ada pesan error)"}`);
             } else {
-              alert(`Job "${data.name}" disubmit (Flink Job ID: ${data.flink_job_id || "-"}). Lihat panel "Background Jobs" di bawah.`);
+              alert(config.submitJobSuccessMessage(data));
             }
             refreshJobList();
           } finally {
@@ -483,6 +488,10 @@
       buildPayload: (text) => ({ sql: text }),
       placeholder: "Tulis SQL di sini, pisahkan statement dengan ;",
       allowSubmitJob: true,
+      backgroundJobUrl: () => "/sessions/" + currentSessionId + "/background-jobs",
+      buildBackgroundPayload: (text, name) => ({ sql: text, name }),
+      submitJobSuccessMessage: (data) =>
+        `Job "${data.name}" disubmit (Flink Job ID: ${data.flink_job_id || "-"}). Lihat panel "Background Jobs" di bawah.`,
       renderResult(job, resultEl) {
         if (job.status === "FAILED") {
           resultEl.innerHTML = "<pre class='error'>" + escapeHtml(job.error || "(tidak ada pesan error)") + "</pre>";
@@ -515,6 +524,13 @@
       jobsUrl: (id) => "/sessions/" + currentSessionId + "/py-jobs/" + id,
       buildPayload: (text) => ({ code: text }),
       placeholder: "Tulis kode Python di sini, misal:\nprint(t_env.list_tables())",
+      allowSubmitJob: true,
+      backgroundJobUrl: () => "/sessions/" + currentSessionId + "/py-background-jobs",
+      buildBackgroundPayload: (text, name) => ({ code: text, name }),
+      submitJobConfirm:
+        'Submit Job di tab Python jalan di background thread SELAMANYA, tapi tombol "Stop" nanti CUMA REQUEST -- kode kamu harus cek variabel `stop_event` sendiri di dalam loop (misal "while not stop_event.is_set(): ...") biar beneran berhenti. Kalau kode tidak mengecek itu, job akan terus jalan walau sudah di-Stop. Lanjutkan?',
+      submitJobSuccessMessage: (data) =>
+        `Job "${data.name}" disubmit di background thread. Lihat panel "Background Jobs" di bawah.`,
       renderResult(job, resultEl) {
         if (job.status === "FAILED") {
           resultEl.innerHTML = "<pre class='error'>" + escapeHtml(job.error || "(tidak ada pesan error)") + "</pre>";
@@ -762,9 +778,15 @@ print(df)`);
       }
 
       try {
-        const res = await fetch("/sessions/" + currentSessionId + "/background-jobs");
-        if (!res.ok) throw new Error((await res.json()).detail || "Gagal memuat daftar job");
-        const jobs = await res.json();
+        const [sqlRes, pyRes] = await Promise.all([
+          fetch("/sessions/" + currentSessionId + "/background-jobs"),
+          fetch("/sessions/" + currentSessionId + "/py-background-jobs"),
+        ]);
+        if (!sqlRes.ok) throw new Error((await sqlRes.json()).detail || "Gagal memuat daftar job SQL");
+        if (!pyRes.ok) throw new Error((await pyRes.json()).detail || "Gagal memuat daftar job Python");
+        const sqlJobs = (await sqlRes.json()).map((j) => ({ ...j, type: "sql" }));
+        const pyJobs = (await pyRes.json()).map((j) => ({ ...j, type: "python" }));
+        const jobs = [...sqlJobs, ...pyJobs].sort((a, b) => b.submitted_at - a.submitted_at);
 
         if (!jobs.length) {
           listEl.innerHTML = '<p><small class="hint">Belum ada background job di session ini.</small></p>';
@@ -773,30 +795,47 @@ print(df)`);
 
         listEl.innerHTML = "";
         for (const j of jobs) {
+          const isSql = j.type === "sql";
           const row = document.createElement("div");
           row.className = "job-row";
-          const canStop = j.status === "RUNNING";
+          // Job Python tetap RUNNING sampai thread-nya sendiri berhenti (lihat
+          // python_background_jobs.py) -- stop_requested cuma nandain request
+          // sudah dikirim, BUKAN job-nya sudah beneran berhenti.
+          const canStop = j.status === "RUNNING" && (isSql || !j.stop_requested);
           const submittedText = new Date(j.submitted_at * 1000).toLocaleString();
+          const typeBadge = isSql
+            ? '<span class="table-kind-badge">SQL</span>'
+            : '<span class="table-kind-badge">Python</span>';
+          const statusLabel =
+            !isSql && j.status === "RUNNING" && j.stop_requested ? "RUNNING (stop diminta)" : j.status;
+          const metaLine = isSql
+            ? `Flink Job ID: ${escapeHtml(j.flink_job_id || "-")} -- disubmit ${submittedText}`
+            : `disubmit ${submittedText}`;
           row.innerHTML = `
             <div class="job-row-head">
               <h4>${escapeHtml(j.name)}</h4>
-              <span class="status ${j.status}">${j.status}</span>
+              ${typeBadge}
+              <span class="status ${j.status}">${escapeHtml(statusLabel)}</span>
               <button class="secondary job-stop" ${canStop ? "" : "disabled"}>Stop</button>
             </div>
-            <p class="job-meta">Flink Job ID: ${escapeHtml(j.flink_job_id || "-")} -- disubmit ${submittedText}</p>
+            <p class="job-meta">${metaLine}</p>
             ${j.error ? `<pre class="error">${escapeHtml(j.error)}</pre>` : ""}
-            <details class="table-ddl"><summary>Lihat SQL</summary><pre>${escapeHtml(j.sql)}</pre></details>
+            ${!isSql && j.stdout ? `<details class="table-ddl"><summary>Lihat stdout</summary><pre>${escapeHtml(j.stdout)}</pre></details>` : ""}
+            <details class="table-ddl"><summary>${isSql ? "Lihat SQL" : "Lihat kode Python"}</summary><pre>${escapeHtml(isSql ? j.sql : j.code)}</pre></details>
           `;
           const stopBtn = row.querySelector(".job-stop");
           if (canStop) {
             stopBtn.addEventListener("click", async () => {
-              if (!confirm(`Stop job "${j.name}"? Ini nge-cancel job Flink-nya (job_client.cancel()) -- tidak bisa dilanjutkan lagi, harus Submit Job ulang.`)) return;
+              const confirmMsg = isSql
+                ? `Stop job "${j.name}"? Ini nge-cancel job Flink-nya (job_client.cancel()) -- tidak bisa dilanjutkan lagi, harus Submit Job ulang.`
+                : `Stop job "${j.name}"? Ini cuma REQUEST kooperatif lewat stop_event -- job baru beneran berhenti kalau kodenya sendiri mengecek stop_event di loop-nya.`;
+              if (!confirm(confirmMsg)) return;
               stopBtn.disabled = true;
               try {
-                const stopRes = await fetch(
-                  "/sessions/" + currentSessionId + "/background-jobs/" + j.id + "/stop",
-                  { method: "POST" }
-                );
+                const stopUrl = isSql
+                  ? "/sessions/" + currentSessionId + "/background-jobs/" + j.id + "/stop"
+                  : "/sessions/" + currentSessionId + "/py-background-jobs/" + j.id + "/stop";
+                const stopRes = await fetch(stopUrl, { method: "POST" });
                 if (!stopRes.ok) {
                   const err = await stopRes.json();
                   alert(err.detail || "Gagal stop job");

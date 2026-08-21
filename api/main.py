@@ -46,7 +46,15 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from api import background_jobs, connectors, flink_runner, llm_runner, python_runner, session_manager
+from api import (
+    background_jobs,
+    connectors,
+    flink_runner,
+    llm_runner,
+    python_background_jobs,
+    python_runner,
+    session_manager,
+)
 
 app = FastAPI(title="PyFlink SQL Runner")
 
@@ -77,6 +85,11 @@ class GenerateSqlRequest(BaseModel):
 
 class SubmitBackgroundJobRequest(BaseModel):
     sql: str
+    name: str
+
+
+class SubmitPyBackgroundJobRequest(BaseModel):
+    code: str
     name: str
 
 
@@ -177,6 +190,37 @@ def stop_background_job(session_id: str, job_id: str):
     session = _require_session(session_id)
     try:
         if not background_jobs.stop(session, job_id):
+            raise HTTPException(status_code=404, detail="Job tidak ditemukan")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"status": "ok"}
+
+
+@app.post("/sessions/{session_id}/py-background-jobs")
+def submit_py_background_job(session_id: str, req: SubmitPyBackgroundJobRequest):
+    session = _require_session(session_id)
+    if not req.code.strip():
+        raise HTTPException(status_code=400, detail="Kode tidak boleh kosong")
+    if not req.name.strip():
+        raise HTTPException(status_code=400, detail="Nama job tidak boleh kosong")
+
+    # Sync seperti submit_background_job (SQL): yang lama-jalan adalah
+    # thread-nya, bukan pemanggilan submit() ini sendiri.
+    job = python_background_jobs.submit(session, req.code, req.name.strip())
+    return python_background_jobs.to_dict(job)
+
+
+@app.get("/sessions/{session_id}/py-background-jobs")
+def list_py_background_jobs(session_id: str):
+    session = _require_session(session_id)
+    return python_background_jobs.list_jobs(session)
+
+
+@app.post("/sessions/{session_id}/py-background-jobs/{job_id}/stop")
+def stop_py_background_job(session_id: str, job_id: str):
+    session = _require_session(session_id)
+    try:
+        if not python_background_jobs.stop(session, job_id):
             raise HTTPException(status_code=404, detail="Job tidak ditemukan")
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))

@@ -41,11 +41,12 @@ berikutnya:
 ```
 .
 ├── api/                          # Service notebook (FastAPI + UI web)
-│   ├── main.py                   # Endpoint FastAPI (sessions, jobs, py-jobs, background-jobs, chat)
+│   ├── main.py                   # Endpoint FastAPI (sessions, jobs, py-jobs, background-jobs, py-background-jobs, chat)
 │   ├── session_manager.py        # Session Manager -- TableEnvironment terisolasi per session
 │   ├── flink_runner.py           # Eksekusi job SQL notebook, list/describe table
 │   ├── python_runner.py          # Eksekusi cell Python (exec), state persist per session
-│   ├── background_jobs.py        # "Submit Job" -- job INSERT INTO yang jalan selamanya di background
+│   ├── background_jobs.py        # "Submit Job" (SQL) -- job INSERT INTO yang jalan selamanya di background
+│   ├── python_background_jobs.py # "Submit Job" (Python) -- cell Python yang jalan di background thread, stop kooperatif
 │   ├── llm_runner.py             # Chat ke Gemini (google-genai) + agent generate-SQL
 │   ├── connectors.py             # Katalog connector siap-pakai (template CREATE TABLE)
 │   └── static/index.html         # UI notebook (Session bar, tab SQL/Python, LLM Chat, Background Jobs)
@@ -588,9 +589,6 @@ selesai/preview, jobnya berhenti. Kadang butuh sebaliknya -- misal
 - Kalau satu cell isi **lebih dari satu** `INSERT INTO`, semuanya digabung
   jadi **SATU job** lewat `t_env.create_statement_set()` -- berbagi
   pembacaan source yang sama, bukan jadi job terpisah sendiri-sendiri.
-- Sengaja dibatasi ke cell SQL saja, TIDAK untuk cell Python: loop Python
-  (`while True: ...` lewat `exec()`) tidak punya mekanisme cancel yang aman
-  seperti `job_client.cancel()`.
 - **Temuan penting (dites langsung pakai PyFlink asli):** tiap job `INSERT`
   ternyata jalan di **MiniCluster-nya sendiri-sendiri** (bukan satu cluster
   dibagi rata per session). Begitu job berhenti (termasuk karena di-cancel),
@@ -602,6 +600,39 @@ selesai/preview, jobnya berhenti. Kadang butuh sebaliknya -- misal
 - **Keterbatasan yang jujur perlu diketahui**: ini masih proses embedded --
   kalau `uvicorn` mati/di-restart, SEMUA background job ikut mati. Bukan
   Flink session cluster beneran (lihat [Langkah Berikutnya](#langkah-berikutnya)).
+
+#### Submit Job (Python) -- loop Python yang jalan SELAMANYA, stop-nya kooperatif
+
+Sejak `api/python_background_jobs.py`, tombol **Submit Job** juga ada di tab
+Python -- tapi mekanismenya BEDA dari versi SQL, karena `exec()` Python bukan
+job Flink:
+
+- Kode cell dijalankan di **background thread** (bukan lewat Flink), pakai
+  namespace yang sama dengan cell Python biasa (`t_env`, variabel antar cell).
+- **TIDAK ADA cancel() yang dijamin** seperti `job_client.cancel()`. Tombol
+  **Stop** cuma nge-set sebuah `threading.Event` bernama `stop_event` yang
+  disuntikkan ke namespace -- kode kamu SENDIRI yang harus mengeceknya di
+  dalam loop, misalnya:
+
+  ```python
+  while not stop_event.is_set():
+      print("masih jalan...")
+      time.sleep(1)
+  ```
+
+  Kalau kode tidak pernah mengecek `stop_event` (atau lagi ke-block di
+  pemanggilan blocking), job TETAP jalan di background walau statusnya sudah
+  menandai stop diminta.
+- Supaya loop selamanya ini tidak memblokir cell SQL/Python lain di session
+  yang sama, thread ini SENGAJA TIDAK memegang `session.lock` selama
+  berjalan -- beda dari cell Python biasa yang selalu pegang lock itu.
+  Konsekuensinya: race condition mungkin terjadi kalau job ini dan cell lain
+  SAMA-SAMA mengubah `t_env`/namespace bersamaan -- pakai fitur ini untuk hal
+  yang relatif independen (polling, print berkala, panggil API luar), bukan
+  yang intens memanipulasi tabel yang sama dengan cell lain yang jalan
+  bersamaan.
+- Muncul di panel **"Background Jobs"** yang sama dengan job SQL (dibedakan
+  lewat badge **SQL**/**Python**), termasuk stdout-nya.
 
 #### Generate SQL (grounded) -- agent LLM yang beneran baca skema session
 
@@ -663,7 +694,9 @@ Urutan yang direkomendasikan dari sini:
    `TableEnvironment` terisolasi, mode batch/streaming dipilih per session.
 8. ~~Submit Job / background jobs~~ ✅ (`api/background_jobs.py`) — job
    `INSERT INTO` bisa disubmit jalan selamanya di background, dilacak +
-   bisa di-Stop lewat `JobClient` bawaan Flink.
+   bisa di-Stop lewat `JobClient` bawaan Flink. Juga tersedia untuk cell
+   Python (`api/python_background_jobs.py`), lewat background thread +
+   `stop_event` kooperatif (bukan cancel yang dijamin seperti versi SQL).
 9. ~~Generate SQL (grounded)~~ ✅ (`llm_runner.generate_sql()`) — agent LLM
    ringan dengan tools `describe_table`/`preview_rows` yang beneran baca
    skema session aktif, bukan menebak.

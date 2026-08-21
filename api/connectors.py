@@ -6,8 +6,12 @@ connector, lalu tinggal klik buat masukkan sebagai cell SQL baru.
 
 Connector 'datagen', 'filesystem', 'print', 'blackhole' sudah kebundle di
 pip install apache-flink (bagian dari flink-table-common), jadi selalu
-"available". Connector 'kafka' butuh JAR terpisah (lihat jars/), makanya
-availability-nya dicek dari keberadaan file JAR itu -- kalau JAR belum
+"available". Connector 'kafka' & 'upsert-kafka' butuh JAR terpisah (lihat
+jars/) -- keduanya SATU jar yang sama (flink-sql-connector-kafka), jadi
+availability-nya dicek dari file JAR yang sama. Connector 'jdbc' butuh DUA
+jar: flink-connector-jdbc (logic connector-nya) + driver JDBC sesuai
+database-nya (di sini MySQL, karena .env sudah punya kredensial MySQL buat
+Dinky) -- availability-nya baru true kalau DUA-DUANYA ada. Kalau JAR belum
 didownload, tetap ditampilkan di UI (biar user tahu itu opsinya) tapi
 ditandai belum tersedia dan tombol "pakai contoh"-nya dimatikan, lihat
 hello_flink_kafka.py untuk cara download JAR-nya.
@@ -24,6 +28,8 @@ import os
 from api.session_manager import PROJECT_DIR
 
 KAFKA_JAR_PATH = os.path.join(PROJECT_DIR, "jars", "flink-sql-connector-kafka-1.17.2.jar")
+JDBC_JAR_PATH = os.path.join(PROJECT_DIR, "jars", "flink-connector-jdbc-3.1.2-1.17.jar")
+MYSQL_DRIVER_JAR_PATH = os.path.join(PROJECT_DIR, "jars", "mysql-connector-j-8.0.33.jar")
 
 _CATALOG = [
     {
@@ -127,12 +133,95 @@ SELECT message FROM kafka_source;""",
     'format' = 'raw'
 );""",
     },
+    {
+        "key": "upsert-kafka",
+        "label": "upsert-kafka (sink)",
+        "description": (
+            "Sama-sama Kafka, tapi khusus buat hasil query yang NILAINYA BERUBAH-UBAH "
+            "(misal agregasi GROUP BY di streaming mode) -- 'kafka' biasa cuma bisa append "
+            "(nolak kalau hasil query ada UPDATE/DELETE), 'upsert-kafka' butuh PRIMARY KEY "
+            "dan menulis tiap perubahan sebagai pesan key-value (key = kolom PK, value = seluruh "
+            "baris, atau tombstone/null value kalau baris itu ke-DELETE). Wajib isi 'key.format' "
+            "DAN 'value.format' terpisah (beda dari 'kafka' yang cuma satu 'format'). "
+            "Jar-nya SAMA dengan 'kafka' biasa, tidak perlu download tambahan."
+        ),
+        "builtin": False,
+        "template": """CREATE TABLE upsert_kafka_sink (
+    kata STRING,
+    jumlah BIGINT,
+    PRIMARY KEY (kata) NOT ENFORCED
+) WITH (
+    'connector' = 'upsert-kafka',
+    'topic' = '${KAFKA_TOPIC}',
+    'properties.bootstrap.servers' = '${KAFKA_BOOTSTRAP_SERVERS}',
+    'key.format' = 'json',
+    'value.format' = 'json'
+);""",
+    },
+    {
+        "key": "jdbc-source",
+        "label": "jdbc (source)",
+        "description": (
+            "Baca dari tabel database relasional (contoh ini: MySQL, pakai kredensial "
+            "MYSQL_* yang sama dengan setup Dinky di .env). PENTING: 'jdbc:mysql://${MYSQL_ADDR}/...' "
+            "cuma bisa resolve MYSQL_ADDR='mysql:3306' kalau proses uvicorn ini jalan DI DALAM "
+            "network Docker yang sama dengan container MySQL-nya -- kalau uvicorn jalan langsung "
+            "di host (bukan di Docker), ganti MYSQL_ADDR ke 'localhost:<port_yang_dipublish>' dulu."
+        ),
+        "builtin": False,
+        "template": """CREATE TABLE jdbc_source (
+    id INT,
+    nama STRING
+) WITH (
+    'connector' = 'jdbc',
+    'url' = 'jdbc:mysql://${MYSQL_ADDR}/${MYSQL_DATABASE}',
+    'table-name' = 'nama_tabel_kamu',
+    'username' = '${MYSQL_USERNAME}',
+    'password' = '${MYSQL_PASSWORD}'
+);
+
+SELECT id, nama FROM jdbc_source;""",
+    },
+    {
+        "key": "jdbc-sink",
+        "label": "jdbc (sink)",
+        "description": (
+            "Tulis hasil query ke tabel MySQL lewat INSERT INTO ... SELECT. PRIMARY KEY di DDL "
+            "membuat sink ini upsert (UPDATE kalau key sudah ada) alih-alih selalu INSERT baru -- "
+            "penting kalau sumbernya hasil agregasi yang nilainya berubah-ubah. Tabelnya harus "
+            "sudah ada duluan di MySQL (jdbc sink tidak auto-create tabel)."
+        ),
+        "builtin": False,
+        "template": """CREATE TABLE jdbc_sink (
+    kata STRING,
+    jumlah BIGINT,
+    PRIMARY KEY (kata) NOT ENFORCED
+) WITH (
+    'connector' = 'jdbc',
+    'url' = 'jdbc:mysql://${MYSQL_ADDR}/${MYSQL_DATABASE}',
+    'table-name' = 'hasil_wordcount',
+    'username' = '${MYSQL_USERNAME}',
+    'password' = '${MYSQL_PASSWORD}'
+);""",
+    },
 ]
 
 
 def list_connectors() -> list[dict]:
     kafka_available = os.path.exists(KAFKA_JAR_PATH)
+    jdbc_available = os.path.exists(JDBC_JAR_PATH) and os.path.exists(MYSQL_DRIVER_JAR_PATH)
+    # kafka & upsert-kafka satu jar yang sama; jdbc-source/jdbc-sink butuh
+    # connector jar + driver jar sekaligus (lihat docstring modul ini).
+    NEEDS_KAFKA_JAR = {"kafka-source", "kafka-sink", "upsert-kafka"}
+    NEEDS_JDBC_JAR = {"jdbc-source", "jdbc-sink"}
     return [
-        {**entry, "available": entry["builtin"] or kafka_available}
+        {
+            **entry,
+            "available": (
+                entry["builtin"]
+                or (entry["key"] in NEEDS_KAFKA_JAR and kafka_available)
+                or (entry["key"] in NEEDS_JDBC_JAR and jdbc_available)
+            ),
+        }
         for entry in _CATALOG
     ]

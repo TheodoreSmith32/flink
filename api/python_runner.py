@@ -25,6 +25,10 @@ Output cell HANYA dari print() (di-redirect lewat contextlib.redirect_stdout),
 TIDAK ada auto-display ekspresi terakhir seperti Jupyter -- lebih sederhana
 dan predictable buat belajar.
 
+`TableResult.print()` bawaan PyFlink DITEMPEL (lihat _notebook_print di
+bawah) supaya `.execute().print()` ikut ke-capture juga -- versi aslinya
+nulis langsung ke stdout JVM lewat py4j, lolos dari redirect_stdout di atas.
+
 PERINGATAN KEAMANAN: exec() menjalankan Python APA ADANYA -- termasuk baca/
 tulis file, `os.system(...)`, dst. Ini oke untuk dipakai sendiri di
 localhost (default uvicorn hanya bind ke 127.0.0.1), tapi JANGAN expose
@@ -35,14 +39,52 @@ saja di mesin ini.
 
 import contextlib
 import io
+import itertools
 import time
 import traceback
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
 
+from pyflink.table.table_result import TableResult
+
 from api import session_manager
 from api.session_manager import Session
+
+# Sama seperti flink_runner.PREVIEW_ROW_LIMIT (SELECT preview) -- supaya
+# .execute().print() dari source unbounded (Kafka dkk) tidak nge-block cell
+# ini selamanya.
+PREVIEW_ROW_LIMIT = 20
+
+
+def _notebook_print(self: TableResult) -> None:
+    """Pengganti TableResult.print() bawaan PyFlink, ditempel di bawah modul
+    ini. Versi asli manggil self._j_table_result.print() -- nulis langsung
+    ke stdout JVM lewat py4j, yang TIDAK ke-capture oleh
+    contextlib.redirect_stdout() di run_job() (nyasar ke stdout proses
+    uvicorn, bukan ke hasil cell). Versi ini narik hasil balik ke Python
+    (collect()) baru print() Python biasa, jadi user bisa nulis
+    `.execute().print()` seperti biasa dan hasilnya tetap keluar di cell --
+    gak perlu tau bedanya print() vs .print()."""
+    iterator = self.collect()
+    try:
+        rows = list(itertools.islice(iterator, PREVIEW_ROW_LIMIT))
+    finally:
+        iterator.close()
+
+    for row in rows:
+        print(row)
+    if len(rows) == PREVIEW_ROW_LIMIT:
+        print(
+            f"... (dipotong, cuma {PREVIEW_ROW_LIMIT} baris pertama -- "
+            "pakai .to_pandas() kalau butuh semuanya)"
+        )
+
+
+# Ditempel sekali di sini, tidak pernah di-restore -- modul ini cuma dipakai
+# di proses FastAPI (script CLI jobs/*.py jalan di proses Python terpisah,
+# jadi tidak kena patch ini).
+TableResult.print = _notebook_print
 
 
 class JobStatus(str, Enum):
