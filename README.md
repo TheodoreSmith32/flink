@@ -51,15 +51,24 @@ berikutnya:
 │   ├── connectors.py             # Katalog connector siap-pakai (template CREATE TABLE)
 │   └── static/index.html         # UI notebook (Session bar, tab SQL/Python, LLM Chat, Background Jobs)
 ├── data/                         # Data contoh + hasil output sink/CSV
-│   └── kalimat.csv               # Source data untuk hello_flink_file.py
+│   └── kalimat.csv               # Source data untuk jobs/hello_flink_file.py
 ├── jars/                         # JAR connector tambahan
-│   └── flink-sql-connector-kafka-1.17.2.jar
-├── hello_flink.py                # 1. Table API dasar (BATCH)
-├── hello_flink_streaming.py      # 2. Mode STREAMING
-├── hello_flink_file.py           # 3. Source dari file
-├── hello_flink_sink.py           # 4. Sink ke file
-├── hello_flink_to_csv.py         # 5. CSV tanpa sink table
-├── hello_flink_kafka.py          # 6. Source dari Kafka
+│   ├── flink-sql-connector-kafka-1.17.2.jar
+│   ├── flink-connector-jdbc-3.1.2-1.17.jar        # + driver di bawah, buat connector 'jdbc'
+│   ├── mysql-connector-j-8.0.33.jar
+│   └── flink-sql-avro-confluent-registry-1.17.2.jar  # buat format 'avro-confluent'
+├── jobs/                         # Script CLI satu-per-satu (dijalankan via `python jobs/...`)
+│   ├── hello_flink.py             # 1. Table API dasar (BATCH)
+│   ├── hello_flink_streaming.py   # 2. Mode STREAMING
+│   ├── hello_flink_file.py        # 3. Source dari file
+│   ├── hello_flink_sink.py        # 4. Sink ke file
+│   ├── hello_flink_to_csv.py      # 5. CSV tanpa sink table
+│   ├── hello_flink_kafka.py       # 6. Source dari Kafka (Table API)
+│   ├── hello_flink_datastream.py  # Word count yang sama, tapi pakai DataStream API
+│   ├── flink_kafka.py             # Source Kafka pakai DataStream API (KafkaSource)
+│   ├── flink_kafka_2.py           # Sama, versi preview terbatas (islice + close)
+│   ├── hello_flink_kafka_avro.py  # Source Kafka format Avro + Confluent Schema Registry
+│   └── avro_schema_lookup.py      # Utility: lihat skema Avro asli dari Schema Registry
 ├── requirements.txt
 ├── template.env                  # Contoh .env (isi .env asli jangan di-commit)
 └── .env                          # Kredensial lokal (di-gitignore)
@@ -95,7 +104,7 @@ Berikutnya](#langkah-berikutnya).
 ```bash
 source .venv/bin/activate
 pip install -r requirements.txt   # kalau dependency belum terpasang
-python hello_flink.py             # contoh paling sederhana, mode BATCH
+python jobs/hello_flink.py        # contoh paling sederhana, mode BATCH
 ```
 
 Tidak perlu langkah instalasi Java/JAVA_HOME manual — sudah ditangani oleh
@@ -156,7 +165,7 @@ database. Hasilnya dihitung sekali sampai tuntas, baru ditampilkan.
 
 ```bash
 source .venv/bin/activate
-python hello_flink.py
+python jobs/hello_flink.py
 ```
 
 ### 2. `hello_flink_streaming.py` — mode STREAMING
@@ -179,7 +188,7 @@ streamnya ada ujungnya), tapi **cara Flink mengeksekusi beda**:
 
 ```bash
 source .venv/bin/activate
-python hello_flink_streaming.py
+python jobs/hello_flink_streaming.py
 ```
 
 ### 3. `hello_flink_file.py` — SOURCE dari file
@@ -212,7 +221,7 @@ ke Python (`.collect()`), dipecah jadi kata, dimasukkan lagi sebagai
 
 ```bash
 source .venv/bin/activate
-python hello_flink_file.py
+python jobs/hello_flink_file.py
 ```
 
 ### 4. `hello_flink_sink.py` — SINK ke file
@@ -261,7 +270,7 @@ Poin penting:
 
 ```bash
 source .venv/bin/activate
-python hello_flink_sink.py
+python jobs/hello_flink_sink.py
 ```
 
 ### 5. `hello_flink_to_csv.py` — CSV tanpa sink table
@@ -301,7 +310,7 @@ Python).
 
 ```bash
 source .venv/bin/activate
-python hello_flink_to_csv.py
+python jobs/hello_flink_to_csv.py
 ```
 
 ### 6. `hello_flink_kafka.py` — SOURCE dari Kafka
@@ -342,8 +351,31 @@ KAFKA_TOPIC=topic_kafka
 
 ```bash
 source .venv/bin/activate
-python hello_flink_kafka.py
+python jobs/hello_flink_kafka.py
 ```
+
+> **Catatan insiden: SELECT unbounded yang nge-hang selamanya**
+>
+> Kalau kamu jalankan langsung (bukan lewat notebook `api/`) sesuatu seperti
+> `t_env.sql_query("SELECT ... FROM kafka_source LIMIT 5").execute().print()`
+> di atas source yang GENUINELY unbounded (Kafka tanpa `scan.bounded.mode`),
+> job itu **TIDAK akan berhenti sendiri** walau ada `LIMIT` di SQL-nya --
+> `LIMIT` cuma membatasi berapa baris yang DITAMPILKAN/dikembalikan, bukan
+> sinyal ke Flink buat berhenti membaca source-nya. Job-nya tetap jalan (dan
+> proses Python yang menunggu hasilnya ikut menggantung) sampai di-`Ctrl+C`
+> manual.
+>
+> Ada dua cara benar menghindari ini, keduanya sudah dipakai di project ini:
+> 1. **`scan.bounded.mode` di level source** (lihat
+>    `jobs/hello_flink_kafka_avro.py`) — source-nya sendiri berhenti membaca
+>    begitu sampai offset tertentu, jadi job selesai secara alami.
+> 2. **Tarik lewat iterator lalu `.close()` manual** setelah dapat baris
+>    secukupnya (lihat `flink_runner._run_select()` dan
+>    `background_jobs.preview_select()` di `api/`, atau versi DataStream API
+>    di `jobs/flink_kafka_2.py`) — menutup iterator lebih awal ternyata JUGA
+>    membatalkan job Flink di baliknya, jadi ini yang dipakai notebook `api/`
+>    untuk semua preview SELECT (`PREVIEW_ROW_LIMIT`), bukan cuma andalin
+>    `LIMIT` di SQL.
 
 ### 7. `api/` — UI notebook buat submit SQL
 
