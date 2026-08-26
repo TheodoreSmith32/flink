@@ -1,0 +1,50 @@
+# Infra LOKAL buat demo fraud detection -- SENGAJA terpisah dari
+# KAFKA_BOOTSTRAP_SERVERS/KAFKA_TOPIC di .env (yang menunjuk ke broker dev
+# Bank Sinarmas beneran) supaya data transaksi palsu dari
+# usecases/fraud_detection/generate_transactions.py tidak pernah numpang di
+# broker produksi-ish itu. Kafka di sini KRaft mode (tanpa Zookeeper) --
+# single broker, cukup buat demo, bukan buat production.
+services:
+  postgres:
+    image: postgres:16
+    container_name: flink-fraud-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-fraud_demo}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    ports:
+      # Host port 5433 (bukan 5432) biar tidak bentrok kalau kamu sudah
+      # punya Postgres lokal lain jalan di 5432.
+      - "5433:5432"
+    volumes:
+      - ./usecases/fraud_detection/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - flink-fraud-postgres-data:/var/lib/postgresql/data
+
+  kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    container_name: flink-fraud-kafka
+    restart: unless-stopped
+    ports:
+      - "9094:9094"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093,EXTERNAL://0.0.0.0:9094
+      # Listener PLAINTEXT (9092) buat dipakai antar-container (Flink job
+      # kalau nanti dijalankan di container juga); EXTERNAL (9094) buat
+      # diakses dari host (script Python kamu di luar Docker).
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,EXTERNAL://localhost:9094
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      CLUSTER_ID: U1IGIskfQFyyd4dzXGWz6A
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    volumes:
+      - flink-fraud-kafka-data:/var/lib/kafka/data
+
+volumes:
+  flink-fraud-postgres-data:
+  flink-fraud-kafka-data:

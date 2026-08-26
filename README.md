@@ -35,6 +35,8 @@ berikutnya:
 6. `hello_flink_kafka.py` — **source** dari Kafka.
 7. `api/` — service FastAPI dengan UI notebook (tab SQL, Python, dan LLM
    Chat) untuk submit query interaktif dari browser.
+8. `usecases/fraud_detection/` — use case demo hackathon: Kafka → Flink
+   (window SQL) → Postgres → LLM explainer → dashboard.
 
 ## Struktur Project
 
@@ -54,8 +56,9 @@ berikutnya:
 │   └── kalimat.csv               # Source data untuk jobs/hello_flink_file.py
 ├── jars/                         # JAR connector tambahan
 │   ├── flink-sql-connector-kafka-1.17.2.jar
-│   ├── flink-connector-jdbc-3.1.2-1.17.jar        # + driver di bawah, buat connector 'jdbc'
+│   ├── flink-connector-jdbc-3.1.2-1.17.jar        # + 2 driver di bawah, buat connector 'jdbc'
 │   ├── mysql-connector-j-8.0.33.jar
+│   ├── postgresql-42.7.4.jar
 │   └── flink-sql-avro-confluent-registry-1.17.2.jar  # buat format 'avro-confluent'
 ├── jobs/                         # Script CLI satu-per-satu (dijalankan via `python jobs/...`)
 │   ├── hello_flink.py             # 1. Table API dasar (BATCH)
@@ -68,7 +71,20 @@ berikutnya:
 │   ├── flink_kafka.py             # Source Kafka pakai DataStream API (KafkaSource)
 │   ├── flink_kafka_2.py           # Sama, versi preview terbatas (islice + close)
 │   ├── hello_flink_kafka_avro.py  # Source Kafka format Avro + Confluent Schema Registry
-│   └── avro_schema_lookup.py      # Utility: lihat skema Avro asli dari Schema Registry
+│   ├── avro_schema_lookup.py      # Utility: lihat skema Avro asli dari Schema Registry
+│   ├── flink_sink_postgre/        # Kafka -> Flink -> Postgres (connector 'jdbc')
+│   │   ├── topic_to_postgre.py
+│   │   ├── produce_test_data.py
+│   │   └── sample_data.jsonl
+│   └── hackatown/                 # Contoh windowing DataStream (ProcessWindowFunction)
+│       └── flink_sql_01.py        # Traffic anomaly detection (interval join + window 15m)
+├── usecases/
+│   └── fraud_detection/          # Use case demo hackathon -- lihat section "Fraud Detection Demo" di Usage
+│       ├── init.sql               # Skema Postgres: fraud_alerts + governance_log
+│       ├── generate_transactions.py
+│       ├── fraud_job.py
+│       └── llm_explainer_worker.py
+├── docker-compose.yml            # Postgres + Kafka LOKAL buat demo fraud_detection (terpisah dari broker dev asli)
 ├── requirements.txt
 ├── template.env                  # Contoh .env (isi .env asli jangan di-commit)
 └── .env                          # Kredensial lokal (di-gitignore)
@@ -85,7 +101,10 @@ berikutnya:
 | pandas | 2.3.3 | `.to_pandas()` di `hello_flink_to_csv.py` |
 | pyarrow | 11.0.0 | Dibutuhkan `.to_pandas()` |
 | python-dotenv | 1.2.2 | Baca konfigurasi dari `.env` |
-| google-genai | 2.17.0 | Tab "LLM Chat" (Gemini) di `api/` |
+| google-genai | 2.17.0 | Tab "LLM Chat" (Gemini) di `api/`, dan `llm_explainer_worker.py` |
+| kafka-python | 3.0.11 | Producer Kafka murni (bukan lewat Flink) -- `generate_transactions.py`, `produce_test_data.py` |
+| psycopg2-binary | 2.9.10 | Baca/tulis Postgres langsung dari Python (bukan lewat Flink JDBC connector) -- `llm_explainer_worker.py`, `api/fraud_dashboard.py` |
+| Docker + Docker Compose | - | `docker-compose.yml` -- Postgres & Kafka LOKAL buat demo `usecases/fraud_detection/` |
 
 Rencana ke depan (belum diimplementasikan): **Dinky + Flink session
 cluster** lewat Docker, lihat `template.env` dan [Langkah
@@ -131,6 +150,9 @@ commit `.env` asli — sudah masuk `.gitignore`.
 | `MYSQL_USERNAME` | Username MySQL Dinky | `<PLACEHOLDER>` | Tidak (belum dipakai kode saat ini) |
 | `MYSQL_PASSWORD` | Password MySQL Dinky | `<PLACEHOLDER>` | Tidak (belum dipakai kode saat ini) |
 | `MYSQL_ROOT_PASSWORD` | Root password MySQL Dinky | `<PLACEHOLDER>` | Tidak (belum dipakai kode saat ini) |
+| `POSTGRES_HOST`/`PORT`/`DB`/`USER`/`PASSWORD` | Koneksi Postgres -- dipakai `jobs/flink_sink_postgre/topic_to_postgre.py` DAN `usecases/fraud_detection/` (fraud_job.py, llm_explainer_worker.py, api/fraud_dashboard.py) | Untuk fraud_detection: `localhost`/`5433`/`fraud_demo`/`postgres`/`postgres`, cocok dengan `docker-compose.yml` | Tidak untuk fraud_detection (sudah ada default) -- Ya untuk `topic_to_postgre.py` (tidak punya default, harus diisi manual) |
+| `KAFKA_FRAUD_BOOTSTRAP_SERVERS` | Broker Kafka LOKAL (docker-compose), khusus `usecases/fraud_detection/` -- SENGAJA terpisah dari `KAFKA_BOOTSTRAP_SERVERS` di atas (itu broker dev asli, jangan dipakai kirim data fraud palsu) | `localhost:9094` | Tidak (sudah ada default cocok docker-compose.yml) |
+| `KAFKA_FRAUD_TOPIC` | Nama topic Kafka buat `usecases/fraud_detection/` | `fraud_transactions` | Tidak |
 
 > Variabel `DINKY_*`, `FLINK_*`, `TZ`, `DB_ACTIVE`, `MYSQL_*` sudah ada di
 > `template.env` untuk setup **Dinky + Flink cluster** via Docker yang masih
@@ -142,7 +164,8 @@ commit `.env` asli — sudah masuk `.gitignore`.
 | Service | Kegunaan | Koneksi |
 |---|---|---|
 | Kafka | Source unbounded untuk `hello_flink_kafka.py` dan tab notebook | Connector Flink `kafka` via JAR di `jars/flink-sql-connector-kafka-1.17.2.jar`, didaftarkan lewat `pipeline.jars`; alamat broker & topic dari `.env` |
-| Google Gemini | Tab "LLM Chat" di notebook `api/` | SDK `google-genai`, autentikasi via `GEMINI_API_KEY` di `.env` |
+| Google Gemini | Tab "LLM Chat" di notebook `api/`, dan `llm_explainer_worker.py` | SDK `google-genai`, autentikasi via `GEMINI_API_KEY` di `.env` |
+| Postgres | Sink `jobs/flink_sink_postgre/topic_to_postgre.py` (connector Flink `jdbc`) DAN `usecases/fraud_detection/` (Flink `jdbc` sink + baca/tulis langsung via `psycopg2`) | Connector `jdbc` + driver `jars/postgresql-42.7.4.jar`; buat fraud_detection, jalan LOKAL lewat `docker-compose.yml` (port host 5433) |
 
 ## Usage
 
@@ -683,6 +706,85 @@ tombol "Kirim ke Notebook"), ada mode kedua: checkbox **"Generate SQL
   MEMBACA, tidak pernah bisa mengubah session dengan sendirinya.
 - Hasilnya tetap cuma disisipkan sebagai cell baru (lewat jalur render yang
   sama dengan fence-detection) -- user tetap harus klik Run sendiri.
+
+### 8. `usecases/fraud_detection/` — deteksi fraud end-to-end (demo hackathon)
+
+Use case yang disiapkan buat demo lomba **Confluent AI Day 2026**: deteksi
+transaksi mencurigakan secara real-time, bukan cuma contoh belajar. Alurnya:
+
+```
+generate_transactions.py → Kafka → fraud_job.py (Flink) → Postgres → llm_explainer_worker.py → Dashboard
+```
+
+1. **`generate_transactions.py`** — producer transaksi PALSU (akun, amount,
+   merchant, waktu) ke Kafka LOKAL, sesekali sengaja bikin "burst" (banyak
+   transaksi beruntun dari satu akun) buat mancing deteksi. **Broker Kafka di
+   sini SENGAJA lokal** (`KAFKA_FRAUD_BOOTSTRAP_SERVERS`/`KAFKA_FRAUD_TOPIC`,
+   lihat [Environment Variables](#environment-variables)) -- terpisah total
+   dari `KAFKA_BOOTSTRAP_SERVERS`/`KAFKA_TOPIC` yang menunjuk ke broker dev
+   Bank Sinarmas beneran, biar data palsu gak pernah numpang di broker itu.
+2. **`fraud_job.py`** — job Flink SQL murni (Table API, BUKAN DataStream
+   API/`ProcessWindowFunction` seperti `jobs/hackatown/flink_sql_01.py`,
+   sengaja beda teknik). Pakai **window TVF `TUMBLE`** (SQL, bukan
+   DataStream) buat hitung jumlah transaksi per akun per 1 menit; kalau
+   jumlahnya ≥5 ATAU amount terbesarnya ≥Rp 1 juta (placeholder threshold,
+   belum berbasis baseline historis -- lihat komentar `MIN_TXN_COUNT`/
+   `MIN_TXN_AMOUNT` di file-nya), baris itu ditandai dan ditulis **dalam
+   SATU job** (`create_statement_set()`) ke dua sink Postgres: `fraud_alerts`
+   (baris flagged-nya) dan `governance_log` (audit trail, stage
+   `flink_flagged`).
+3. **`llm_explainer_worker.py`** — proses Python TERPISAH (bukan bagian job
+   Flink, sengaja plain sleep-loop tanpa tools/agent), polling
+   `fraud_alerts` yang `explanation IS NULL`, minta Gemini bikin penjelasan
+   bahasa manusia, tulis balik + baris `governance_log` kedua (stage
+   `llm_explained`). **Belum disambungkan ke API key beneran** -- butuh
+   `GEMINI_API_KEY` di `.env`, sisanya (`fraud_job.py`, dashboard) tetap jalan
+   normal tanpa ini, cuma kolom `explanation` kosong terus.
+4. **`api/fraud_dashboard.py` + `api/static/fraud_dashboard.html`** —
+   dashboard read-only, baca langsung dari Postgres (BUKAN lewat Flink/session
+   apa pun), di-serve lewat `api/main.py` (`GET /dashboard`, data-nya dari
+   `GET /fraud-alerts`). Auto-refresh tiap 4 detik.
+
+**Setup (sekali saja):**
+
+```bash
+docker compose up -d          # nyalain Postgres + Kafka lokal, tunggu ~10 detik
+```
+
+**Jalankan (3 proses terpisah, masing-masing di terminal sendiri):**
+
+```bash
+# Terminal 1 -- Flink-nya, biarin jalan (nunggu data terus, gak akan selesai sendiri)
+source .venv/bin/activate
+python usecases/fraud_detection/fraud_job.py
+
+# Terminal 2 -- generator transaksi palsu
+source .venv/bin/activate
+python usecases/fraud_detection/generate_transactions.py
+
+# Terminal 3 -- server dashboard (kalau belum jalan)
+source .venv/bin/activate
+uvicorn api.main:app --reload --app-dir .
+```
+
+Tunggu ±1 menit (window-nya 1 menit) lalu buka `http://localhost:8000/dashboard`
+-- baris baru akan muncul sendiri tanpa refresh manual.
+
+**Bug nyata yang sempat ketemu (penting buat siapa pun yang otak-atik
+`fraud_job.py` lagi):** job-nya jalan tanpa error sama sekali tapi Postgres
+tetap kosong selamanya. Ternyata `TableEnvironment` default pakai
+**parallelism = jumlah CPU core** (16 di mesin testing), sementara topic
+Kafka-nya cuma punya **1 partition** -- 15 dari 16 source subtask gak pernah
+kebagian partition dan nganggur SELAMANYA, dan watermark gabungan Flink
+adalah MINIMUM dari semua subtask (termasuk yang nganggur itu), jadi window
+`TUMBLE` gak akan PERNAH menutup di stream unbounded manapun. Sudah diperbaiki
+dengan `t_env.get_config().set("parallelism.default", "1")` di
+`create_table_env()` -- **jangan dihapus** kalau topic Kafka-nya masih 1
+partition.
+
+**Yang belum dikerjakan:** sambungkan `GEMINI_API_KEY` beneran biar kolom
+`explanation` di dashboard keisi, dan (opsional) bikin window lebih pendek +
+tombol trigger manual biar demo gak nunggu burst random muncul.
 
 ## Istilah Penting
 

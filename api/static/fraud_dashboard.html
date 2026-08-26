@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<title>Fraud Detection Dashboard</title>
+<style>
+  :root {
+    --bg: #0b0c10;
+    --surface: #16181f;
+    --surface-raised: #1c1f28;
+    --border: #262a35;
+    --border-strong: #383e4c;
+    --text: #eef0f5;
+    --text-muted: #9099ab;
+    --text-faint: #6b7386;
+    --primary: #3b82f6;
+    --success: #34d399;
+    --success-bg: rgba(52, 211, 153, 0.15);
+    --danger: #f87171;
+    --danger-bg: rgba(248, 113, 113, 0.14);
+    --warning: #fbbf24;
+    --warning-bg: rgba(251, 191, 36, 0.14);
+    --radius: 14px;
+    --radius-sm: 9px;
+    --shadow: 0 4px 18px rgba(0, 0, 0, 0.4), 0 1px 2px rgba(0, 0, 0, 0.3);
+    --font-sans: "IBM Plex Sans", -apple-system, "Segoe UI", system-ui, sans-serif;
+    --mono: "IBM Plex Mono", "SF Mono", Consolas, "Roboto Mono", monospace;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f5f6fa;
+      --surface: #ffffff;
+      --surface-raised: #ffffff;
+      --border: #e2e5ec;
+      --border-strong: #cbd0dc;
+      --text: #12131a;
+      --text-muted: #5c6274;
+      --text-faint: #8890a0;
+      --success-bg: #e0f5e6;
+      --danger-bg: #fbe4e4;
+      --warning-bg: #fdf1d6;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-sans);
+    padding: 24px;
+  }
+  h1 { font-size: 1.4rem; margin: 0 0 4px; }
+  .subtitle { color: var(--text-muted); font-size: 0.9rem; margin: 0 0 20px; }
+  .summary-row { display: flex; gap: 14px; margin-bottom: 22px; flex-wrap: wrap; }
+  .stat-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px 20px;
+    min-width: 140px;
+    box-shadow: var(--shadow);
+  }
+  .stat-card .value { font-size: 1.8rem; font-weight: 600; }
+  .stat-card .label { color: var(--text-muted); font-size: 0.8rem; margin-top: 2px; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+    font-size: 0.88rem;
+  }
+  th, td {
+    padding: 10px 12px;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  th {
+    background: var(--surface-raised);
+    color: var(--text-muted);
+    font-weight: 600;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
+  tr:last-child td { border-bottom: none; }
+  .mono { font-family: var(--mono); }
+  .badge {
+    display: inline-block;
+    padding: 2px 9px;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    font-weight: 600;
+  }
+  .badge-danger { background: var(--danger-bg); color: var(--danger); }
+  .badge-warning { background: var(--warning-bg); color: var(--warning); }
+  .badge-success { background: var(--success-bg); color: var(--success); }
+  .explanation { max-width: 360px; color: var(--text-muted); font-size: 0.85rem; }
+  .explanation.pending { font-style: italic; color: var(--text-faint); }
+  #error-banner {
+    display: none;
+    background: var(--danger-bg);
+    color: var(--danger);
+    border: 1px solid var(--danger);
+    border-radius: var(--radius-sm);
+    padding: 12px 16px;
+    margin-bottom: 18px;
+    font-size: 0.88rem;
+  }
+  .empty-state {
+    text-align: center;
+    color: var(--text-muted);
+    padding: 40px 0;
+  }
+  .refresh-note { color: var(--text-faint); font-size: 0.78rem; margin-top: 14px; }
+</style>
+</head>
+<body>
+  <h1>🔍 Fraud Detection Dashboard</h1>
+  <p class="subtitle">
+    Baca langsung dari Postgres lokal (fraud_alerts + governance_log) --
+    lihat <code>usecases/fraud_detection/</code>. Auto-refresh tiap 4 detik.
+  </p>
+
+  <div id="error-banner"></div>
+
+  <div class="summary-row" id="summary-row"></div>
+
+  <div id="table-container"></div>
+
+  <p class="refresh-note" id="last-updated"></p>
+
+  <script>
+    const errorBanner = document.getElementById('error-banner');
+    const summaryRow = document.getElementById('summary-row');
+    const tableContainer = document.getElementById('table-container');
+    const lastUpdated = document.getElementById('last-updated');
+
+    function scoreBadge(score) {
+      if (score >= 3) return `<span class="badge badge-danger">raw_score ${score.toFixed(2)}</span>`;
+      if (score >= 1.5) return `<span class="badge badge-warning">raw_score ${score.toFixed(2)}</span>`;
+      return `<span class="badge badge-success">raw_score ${score.toFixed(2)}</span>`;
+    }
+
+    function formatRupiah(n) {
+      return 'Rp ' + Math.round(n).toLocaleString('id-ID');
+    }
+
+    function render(data) {
+      const { summary, alerts } = data;
+
+      summaryRow.innerHTML = `
+        <div class="stat-card"><div class="value">${summary.total_alerts}</div><div class="label">Total alert</div></div>
+        <div class="stat-card"><div class="value">${summary.explained}</div><div class="label">Sudah dijelaskan LLM</div></div>
+        <div class="stat-card"><div class="value">${summary.distinct_accounts}</div><div class="label">Akun berbeda ter-flag</div></div>
+      `;
+
+      if (alerts.length === 0) {
+        tableContainer.innerHTML = `<div class="empty-state">Belum ada transaksi yang di-flag. Jalankan generate_transactions.py + fraud_job.py.</div>`;
+        return;
+      }
+
+      const rows = alerts.map(a => `
+        <tr>
+          <td class="mono">${a.transaction_id}</td>
+          <td class="mono">${a.account_id}</td>
+          <td class="mono">${formatRupiah(a.amount)}</td>
+          <td>${a.merchant ?? '-'}</td>
+          <td class="mono">${a.txn_count_window}</td>
+          <td>${scoreBadge(a.raw_score)}</td>
+          <td class="mono">${a.flagged_at.replace('T', ' ')}</td>
+          <td class="explanation ${a.explanation ? '' : 'pending'}">${a.explanation ?? '(menunggu penjelasan LLM...)'}</td>
+        </tr>
+      `).join('');
+
+      tableContainer.innerHTML = `
+        <table>
+          <thead>
+            <tr>
+              <th>ID Transaksi</th><th>Akun</th><th>Amount</th><th>Merchant</th>
+              <th>Jumlah/Window</th><th>Skor</th><th>Waktu Flag</th><th>Penjelasan LLM</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      `;
+    }
+
+    async function refresh() {
+      try {
+        const res = await fetch('/fraud-alerts');
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          throw new Error(body.detail || `HTTP ${res.status}`);
+        }
+        const data = await res.json();
+        errorBanner.style.display = 'none';
+        render(data);
+      } catch (err) {
+        errorBanner.style.display = 'block';
+        errorBanner.textContent = '⚠ ' + err.message;
+      }
+      lastUpdated.textContent = 'Terakhir diperbarui: ' + new Date().toLocaleTimeString('id-ID');
+    }
+
+    refresh();
+    setInterval(refresh, 4000);
+  </script>
+</body>
+</html>
