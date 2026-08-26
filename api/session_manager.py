@@ -108,8 +108,8 @@ def get_env(session: Session) -> TableEnvironment:
         )
         session.env = TableEnvironment.create(settings)
         # Daftarkan semua connector JAR yang tersedia dari awal (kafka,
-        # jdbc + driver MySQL) sama seperti di hello_flink_kafka.py, biar
-        # session ini bisa langsung CREATE TABLE ... WITH ('connector'=...)
+        # jdbc + driver MySQL/Postgres) sama seperti di hello_flink_kafka.py,
+        # biar session ini bisa langsung CREATE TABLE ... WITH ('connector'=...)
         # tanpa langkah tambahan -- lihat api/connectors.py untuk daftar
         # connector & jar yang dicek availability-nya. Kafka & upsert-kafka
         # pakai jar yang sama; jdbc butuh connector jar + driver jar
@@ -118,6 +118,7 @@ def get_env(session: Session) -> TableEnvironment:
             "flink-sql-connector-kafka-1.17.2.jar",
             "flink-connector-jdbc-3.1.2-1.17.jar",
             "mysql-connector-j-8.0.33.jar",
+            "postgresql-42.7.4.jar",
         ]
         jar_paths = [os.path.join(PROJECT_DIR, "jars", name) for name in jar_names]
         existing_jars = [p for p in jar_paths if os.path.exists(p)]
