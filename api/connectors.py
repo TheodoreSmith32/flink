@@ -30,6 +30,7 @@ from api.session_manager import PROJECT_DIR
 KAFKA_JAR_PATH = os.path.join(PROJECT_DIR, "jars", "flink-sql-connector-kafka-1.17.2.jar")
 JDBC_JAR_PATH = os.path.join(PROJECT_DIR, "jars", "flink-connector-jdbc-3.1.2-1.17.jar")
 MYSQL_DRIVER_JAR_PATH = os.path.join(PROJECT_DIR, "jars", "mysql-connector-j-8.0.33.jar")
+POSTGRES_DRIVER_JAR_PATH = os.path.join(PROJECT_DIR, "jars", "postgresql-42.7.4.jar")
 
 _CATALOG = [
     {
@@ -183,6 +184,52 @@ SELECT message FROM kafka_source;""",
 SELECT id, nama FROM jdbc_source;""",
     },
     {
+        "key": "jdbc-source-postgres",
+        "label": "jdbc (source, Postgres)",
+        "description": (
+            "Baca dari tabel PostgreSQL, pakai kredensial POSTGRES_* di .env "
+            "(punya kamu sendiri, misal Postgres local)."
+        ),
+        "builtin": False,
+        "template": """CREATE TABLE jdbc_source_pg (
+    id BIGINT,
+    nama STRING
+) WITH (
+    'connector' = 'jdbc',
+    'url' = 'jdbc:postgresql://${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}',
+    'table-name' = 'nama_tabel_kamu',
+    'username' = '${POSTGRES_USER}',
+    'password' = '${POSTGRES_PASSWORD}'
+);
+
+SELECT id, nama FROM jdbc_source_pg;""",
+    },
+    {
+        "key": "jdbc-sink-postgres",
+        "label": "jdbc (sink, Postgres)",
+        "description": (
+            "Tulis hasil query ke tabel PostgreSQL lewat INSERT INTO ... SELECT, pakai "
+            "kredensial POSTGRES_* di .env. Tabelnya harus sudah ada duluan di Postgres "
+            "(jdbc sink tidak auto-create tabel) -- lihat jobs/flink_sink_postgre/topic_to_postgre.py "
+            "untuk contoh DDL-nya. Kalau sumber INSERT-nya dari Kafka (genuinely unbounded), "
+            "submit lewat tombol Submit Job, JANGAN Run biasa -- Run biasa nunggu job selesai "
+            "dan bakal menggantung selamanya."
+        ),
+        "builtin": False,
+        "template": """CREATE TABLE jdbc_sink_pg (
+    id BIGINT,
+    nama STRING,
+    nilai DOUBLE,
+    event_time TIMESTAMP(3)
+) WITH (
+    'connector' = 'jdbc',
+    'url' = 'jdbc:postgresql://${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}',
+    'table-name' = '${POSTGRES_TABLE}',
+    'username' = '${POSTGRES_USER}',
+    'password' = '${POSTGRES_PASSWORD}'
+);""",
+    },
+    {
         "key": "jdbc-sink",
         "label": "jdbc (sink)",
         "description": (
@@ -209,18 +256,22 @@ SELECT id, nama FROM jdbc_source;""",
 
 def list_connectors() -> list[dict]:
     kafka_available = os.path.exists(KAFKA_JAR_PATH)
-    jdbc_available = os.path.exists(JDBC_JAR_PATH) and os.path.exists(MYSQL_DRIVER_JAR_PATH)
+    jdbc_mysql_available = os.path.exists(JDBC_JAR_PATH) and os.path.exists(MYSQL_DRIVER_JAR_PATH)
+    jdbc_postgres_available = os.path.exists(JDBC_JAR_PATH) and os.path.exists(POSTGRES_DRIVER_JAR_PATH)
     # kafka & upsert-kafka satu jar yang sama; jdbc-source/jdbc-sink butuh
-    # connector jar + driver jar sekaligus (lihat docstring modul ini).
+    # connector jar + driver jar sekaligus (lihat docstring modul ini) --
+    # MySQL dan Postgres punya driver jar beda, jadi dicek terpisah.
     NEEDS_KAFKA_JAR = {"kafka-source", "kafka-sink", "upsert-kafka"}
-    NEEDS_JDBC_JAR = {"jdbc-source", "jdbc-sink"}
+    NEEDS_JDBC_MYSQL_JAR = {"jdbc-source", "jdbc-sink"}
+    NEEDS_JDBC_POSTGRES_JAR = {"jdbc-source-postgres", "jdbc-sink-postgres"}
     return [
         {
             **entry,
             "available": (
                 entry["builtin"]
                 or (entry["key"] in NEEDS_KAFKA_JAR and kafka_available)
-                or (entry["key"] in NEEDS_JDBC_JAR and jdbc_available)
+                or (entry["key"] in NEEDS_JDBC_MYSQL_JAR and jdbc_mysql_available)
+                or (entry["key"] in NEEDS_JDBC_POSTGRES_JAR and jdbc_postgres_available)
             ),
         }
         for entry in _CATALOG

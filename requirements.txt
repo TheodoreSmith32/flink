@@ -5,3 +5,4 @@ pandas==2.3.3
 pyarrow==11.0.0
 python-dotenv==1.2.2
 google-genai==2.17.0
+kafka-python==3.0.11
