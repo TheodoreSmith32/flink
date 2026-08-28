@@ -1,0 +1,5 @@
+{"id": 101, "pickup_datetime": "2024-01-15T08:05:00", "pu_location_id": 7, "pu_location_name": "Grogol", "trip_distance": 3.2, "fare_amount": 14}
+{"id": 102, "pickup_datetime": "2024-01-15T08:10:00", "pu_location_id": 13, "pu_location_name": "Menteng", "trip_distance": 5.0, "fare_amount": 22}
+{"id": 103, "pickup_datetime": "2024-01-15T08:15:00", "pu_location_id": 21, "pu_location_name": "Kelapa Gading", "trip_distance": 7.8, "fare_amount": 35}
+{"id": 104, "pickup_datetime": "2024-01-15T08:20:00", "pu_location_id": 30, "pu_location_name": "Kebayoran Baru", "trip_distance": 4.1, "fare_amount": 18}
+{"id": 105, "pickup_datetime": "2024-01-15T08:25:00", "pu_location_id": 35, "pu_location_name": "Cawang", "trip_distance": 6.3, "fare_amount": 27}

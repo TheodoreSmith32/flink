@@ -1,0 +1,27 @@
+[
+  {
+    "weather_location_id": 1,
+    "weather_location_name": "Jakarta Pusat",
+    "sumber_cuaca": "BMKG Kemayoran"
+  },
+  {
+    "weather_location_id": 2,
+    "weather_location_name": "Jakarta Utara",
+    "sumber_cuaca": "BMKG Tanjung Priok"
+  },
+  {
+    "weather_location_id": 3,
+    "weather_location_name": "Jakarta Barat",
+    "sumber_cuaca": "Grid terdekat dari BMKG Kemayoran (belum ada stasiun observasi sendiri)"
+  },
+  {
+    "weather_location_id": 4,
+    "weather_location_name": "Jakarta Selatan",
+    "sumber_cuaca": "Grid terdekat dari BMKG Kemayoran (belum ada stasiun observasi sendiri)"
+  },
+  {
+    "weather_location_id": 5,
+    "weather_location_name": "Jakarta Timur",
+    "sumber_cuaca": "BMKG Halim Perdanakusuma"
+  }
+]

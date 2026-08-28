@@ -37,6 +37,8 @@ berikutnya:
    Chat) untuk submit query interaktif dari browser.
 8. `usecases/fraud_detection/` — use case demo hackathon: Kafka → Flink
    (window SQL) → Postgres → LLM explainer → dashboard.
+9. `jobs/hackatown/flink_sql_interval_join.py` — **interval join** dua
+   stream (trip × cuaca), roadmap #11 windowing.
 
 ## Struktur Project
 
@@ -53,7 +55,11 @@ berikutnya:
 │   ├── connectors.py             # Katalog connector siap-pakai (template CREATE TABLE)
 │   └── static/index.html         # UI notebook (Session bar, tab SQL/Python, LLM Chat, Background Jobs)
 ├── data/                         # Data contoh + hasil output sink/CSV
-│   └── kalimat.csv               # Source data untuk jobs/hello_flink_file.py
+│   ├── kalimat.csv               # Source data untuk jobs/hello_flink_file.py
+│   ├── trip_events.json          # Contoh 1 message topic 'trip_events' (lihat section 9)
+│   ├── weather_events.json       # Contoh 1 message topic 'weather_events' (lihat section 9)
+│   ├── trip_locations.json       # Master list kelurahan (pu_location_id -> weather_location_id)
+│   └── weather_locations.json    # Master list zona cuaca (kota administrasi, dipakai trip_locations.json)
 ├── jars/                         # JAR connector tambahan
 │   ├── flink-sql-connector-kafka-1.17.2.jar
 │   ├── flink-connector-jdbc-3.1.2-1.17.jar        # + 2 driver di bawah, buat connector 'jdbc'
@@ -72,12 +78,18 @@ berikutnya:
 │   ├── flink_kafka_2.py           # Sama, versi preview terbatas (islice + close)
 │   ├── hello_flink_kafka_avro.py  # Source Kafka format Avro + Confluent Schema Registry
 │   ├── avro_schema_lookup.py      # Utility: lihat skema Avro asli dari Schema Registry
+│   ├── hello_flink_watermark.py   # Event time & watermark (roadmap #10), demo late-event drop
 │   ├── flink_sink_postgre/        # Kafka -> Flink -> Postgres (connector 'jdbc')
 │   │   ├── topic_to_postgre.py
 │   │   ├── produce_test_data.py
 │   │   └── sample_data.jsonl
-│   └── hackatown/                 # Contoh windowing DataStream (ProcessWindowFunction)
-│       └── flink_sql_01.py        # Traffic anomaly detection (interval join + window 15m)
+│   └── hackatown/                 # Use case Jakarta traffic x weather (lihat section 9)
+│       ├── flink_sql_01.py             # Traffic anomaly detection (interval join + window 15m, DataStream API)
+│       └── flink_sql_interval_join.py  # 9. Interval join trip x cuaca doang (Table API, roadmap #11)
+├── producer/                      # Producer Kafka standalone (dijalankan via `python producer/...`)
+│   ├── watermark_demo_producer.py    # Producer buat hello_flink_watermark.py
+│   ├── weather_events_producer.py    # Dummy weather_events (plain JSON) -- jalan selamanya
+│   └── trip_events_producer.py       # Dummy trip_events (Avro+Schema Registry, SEMENTARA sebelum CDC Postgres)
 ├── usecases/
 │   └── fraud_detection/          # Use case demo hackathon -- lihat section "Fraud Detection Demo" di Usage
 │       ├── init.sql               # Skema Postgres: fraud_alerts + governance_log
@@ -153,6 +165,9 @@ commit `.env` asli — sudah masuk `.gitignore`.
 | `POSTGRES_HOST`/`PORT`/`DB`/`USER`/`PASSWORD` | Koneksi Postgres -- dipakai `jobs/flink_sink_postgre/topic_to_postgre.py` DAN `usecases/fraud_detection/` (fraud_job.py, llm_explainer_worker.py, api/fraud_dashboard.py) | Untuk fraud_detection: `localhost`/`5433`/`fraud_demo`/`postgres`/`postgres`, cocok dengan `docker-compose.yml` | Tidak untuk fraud_detection (sudah ada default) -- Ya untuk `topic_to_postgre.py` (tidak punya default, harus diisi manual) |
 | `KAFKA_FRAUD_BOOTSTRAP_SERVERS` | Broker Kafka LOKAL (docker-compose), khusus `usecases/fraud_detection/` -- SENGAJA terpisah dari `KAFKA_BOOTSTRAP_SERVERS` di atas (itu broker dev asli, jangan dipakai kirim data fraud palsu) | `localhost:9094` | Tidak (sudah ada default cocok docker-compose.yml) |
 | `KAFKA_FRAUD_TOPIC` | Nama topic Kafka buat `usecases/fraud_detection/` | `fraud_transactions` | Tidak |
+| `SCHEMA_REGISTRY_URL` | URL Confluent Schema Registry | `<PLACEHOLDER>` | Ya, untuk `jobs/hello_flink_kafka_avro.py`, `jobs/avro_schema_lookup.py`, `jobs/hackatown/flink_sql_interval_join.py` (trip_events, avro-confluent), `producer/trip_events_producer.py` |
+| `KAFKA_TRIP_TOPIC` | Nama topic trip -- interval join demo | `trip_events` | Tidak |
+| `KAFKA_WEATHER_TOPIC` | Nama topic cuaca -- interval join demo | `weather_events` | Tidak |
 
 > Variabel `DINKY_*`, `FLINK_*`, `TZ`, `DB_ACTIVE`, `MYSQL_*` sudah ada di
 > `template.env` untuk setup **Dinky + Flink cluster** via Docker yang masih
@@ -786,6 +801,115 @@ partition.
 `explanation` di dashboard keisi, dan (opsional) bikin window lebih pendek +
 tombol trigger manual biar demo gak nunggu burst random muncul.
 
+### 9. `jobs/hackatown/flink_sql_interval_join.py` — interval join trip × cuaca
+
+Roadmap #11 (windowing), bagian **interval join**: gabungkan dua stream
+Kafka (`trip_events` + `weather_events`) berdasarkan event-time, murni
+Table API/SQL (tanpa DataStream/anomaly detection -- itu sudah ada versi
+gabungannya di `jobs/hackatown/flink_sql_01.py`).
+
+**Format pesan (beda per topic, sengaja):** `trip_events` = **Avro +
+Confluent Schema Registry** (`producer/trip_events_producer.py` register
+skema ke `SCHEMA_REGISTRY_URL` lalu kirim wire-format Avro asli lewat
+`fastavro`, DDL-nya `format = 'avro-confluent'`), `weather_events` =
+**plain JSON** (`producer/weather_events_producer.py`, DDL-nya
+`format = 'json'`). Ini niru desain `flink_traffic_weather_use_case_upt.pdf`:
+`trip_events` bakal datang dari CDC Debezium (natural-nya Avro), sementara
+`weather_events` dari producer Python sederhana yang gak butuh registry.
+`trip_events_producer.py` ini SEMENTARA buat testing sebelum CDC dari
+Postgres beneran jalan -- lihat catatan lengkap di file itu.
+
+**Isi data contoh (`data/trip_events.json` & `data/weather_events.json`)**
+-- ini skema mentah tiap topic (payload-nya, bukan cara encode-nya di
+Kafka), sebelum di-`CREATE TABLE`:
+
+`data/trip_events.json` (topic `trip_events`):
+
+| Field | Maksudnya (singkat) | Penjelasan lebih detail |
+|---|---|---|
+| `id` | ID Trip | Nomor unik buat satu perjalanan. |
+| `pickup_datetime` | Waktu Jemput | Jam penumpang naik. Ini yang jadi **event time** (dipakai di `WATERMARK FOR`), bukan waktu pesan-nya nyampe ke Flink. |
+| `pu_location_id` | Kode Lokasi Jemput | Angka ID lokasi penjemputan (`pu` = **p**ick**u**p = jemput), level **kelurahan** (lihat `data/trip_locations.json`). BUKAN join key langsung ke `weather_events` -- lihat catatan granularitas di bawah. |
+| `pu_location_name` | Nama Lokasi/Tempat Jemput | Nama area penjemputan yang gampang dibaca (mis. "Grogol"), diturunkan dari `data/trip_locations.json` berdasarkan `pu_location_id`. Cuma buat tampilan. |
+| `trip_distance` | Jarak Trip | Jarak yang ditempuh selama perjalanan. |
+| `fare_amount` | Tarif Trip | Biaya/ongkos perjalanan. |
+
+`data/weather_events.json` (topic `weather_events`):
+
+| Field | Maksudnya (singkat) | Penjelasan lebih detail |
+|---|---|---|
+| `location_id` | Kode Lokasi Cuaca | Angka ID lokasi tempat cuaca ini dicatat, level **kota administrasi** (lihat `data/weather_locations.json`) -- BEDA granularitas dari `pu_location_id` di atas, lihat catatan di bawah. |
+| `event_time` | Waktu Cuaca Dicatat | Jam observasi cuaca dilakukan. Event time sisi ini, dipakai di `WATERMARK FOR`-nya sendiri. |
+| `condition` | Kondisi Cuaca | Kondisi cuaca saat itu (`clear`, `heavy_rain`, dst). Nama kolom ini reserved keyword di Flink SQL, jadi selalu dibungkus backtick (`` `condition` ``) di DDL/SELECT. |
+| `precipitation` | Curah Hujan | Jumlah hujan yang turun. |
+
+**Kenapa gak langsung `pu_location_id = location_id`:** di real life gak ada
+1 stasiun cuaca per kelurahan (BMKG cuma punya segelintir stasiun buat
+SELURUH Jakarta). Makanya di sini `trip_events` dikirim per **kelurahan**
+(`data/trip_locations.json`, 10 zona: Grogol, Tomang, Kebon Jeruk, Menteng,
+Cikini, Kelapa Gading, Pluit, Kebayoran Baru, Kemang, Cawang), sementara
+`weather_events` cuma per **kota administrasi** (`data/weather_locations.json`,
+5 zona: Jakarta Pusat/Utara/Barat/Selatan/Timur). Tiap baris di
+`trip_locations.json` punya `weather_location_id` yang nunjuk ke salah satu
+dari 5 zona itu -- jadi BANYAK kelurahan (`pu_location_id`) bisa merujuk ke
+SATU zona cuaca yang sama (Grogol, Tomang, DAN Kebon Jeruk semuanya "Jakarta
+Barat"). Kedua master list ini jadi satu-satunya sumber kebenaran ID<->nama,
+dipakai bareng oleh `flink_sql_interval_join.py` (lookup di Flink, lewat
+UDF `weather_zone_of()`) DAN `producer/trip_events_producer.py` +
+`producer/weather_events_producer.py` (nama lokasi/kota di output print).
+
+**Kondisi join** (di `build_joined_table()`):
+
+```sql
+FROM trip_events t
+JOIN weather_events w
+    ON t.weather_location_id = w.location_id
+    AND t.pickup_datetime BETWEEN w.event_time - INTERVAL '30' MINUTE
+                               AND w.event_time + INTERVAL '30' MINUTE
+```
+
+`t.weather_location_id` di sini BUKAN kolom asli dari Kafka, tapi **computed
+column** di DDL trip_events (`weather_location_id AS weather_zone_of(pu_location_id)`)
+yang manggil UDF Python lookup ke `data/trip_locations.json`. Trip di-enrich
+cuaca kalau ZONA CUACA-nya sama (bukan kelurahannya) DAN waktunya berdekatan
+(±30 menit). Batas waktu ini wajib ada di interval join -- itu yang bikin
+Flink tahu kapan boleh membuang state lama (lihat komentar lengkap di
+file-nya, termasuk kenapa lookup-nya pakai UDF+computed column, bukan JOIN
+biasa ke tabel `trip_locations`).
+
+Jalankan (3 terminal terpisah, broker dev Bank Sinarmas beneran):
+
+> **Catatan:** kalau `trip_events` sempat error `Unknown data format.
+> Magic number does not match`, itu tandanya ada pesan LAMA non-Avro
+> nyangkut di topic (dari sebelum `trip_events_producer.py` pindah ke
+> Avro+SR) -- hapus & bikin ulang topic `trip_events` (dan/atau subject
+> `trip_events-value` di Schema Registry) dulu, jangan diakalin ganti
+> `scan.startup.mode`. Lihat "CATATAN INSIDEN" di `flink_sql_interval_join.py`.
+
+```bash
+# Terminal 1 -- job-nya, biarin jalan nunggu data
+source .venv/bin/activate
+JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64 python jobs/hackatown/flink_sql_interval_join.py
+
+# Terminal 2 -- dummy weather (plain JSON, jalan selamanya)
+source .venv/bin/activate
+python producer/weather_events_producer.py
+
+# Terminal 3 -- dummy trip (Avro+Schema Registry, SEMENTARA sebelum CDC Postgres beneran jalan)
+source .venv/bin/activate
+python producer/trip_events_producer.py
+```
+
+Beda dari draft sebelumnya (skenario match/gak-match yang di-hardcode):
+`weather_events_producer.py` dan `trip_events_producer.py` sekarang **dua
+producer independen** yang jalan terus-menerus, masing-masing generate
+event ACAK (zona & waktu acak dari master list) tiap ~5 detik -- bukan
+skenario yang dijamin match. Trip bakal ter-enrich cuaca kalau kebetulan
+zona & waktunya jatuh dalam window ±30 menit dari weather event yang sudah
+terkirim; kalau enggak, ya gak muncul. `trip_events_producer.py` ini murni
+buat testing SEBELUM CDC dari Postgres jadi (lihat rencana di catatan
+"Kenapa gak langsung..." di atas) -- matikan begitu CDC-nya live.
+
 ## Istilah Penting
 
 | Istilah | Arti singkat |
@@ -834,14 +958,6 @@ Urutan yang direkomendasikan dari sini:
 9. ~~Generate SQL (grounded)~~ ✅ (`llm_runner.generate_sql()`) — agent LLM
    ringan dengan tools `describe_table`/`preview_rows` yang beneran baca
    skema session aktif, bukan menebak.
-10. **Event time & watermark** — konsep inti streaming yang belum
-   tersentuh sama sekali di contoh sekarang (source Kafka di atas masih
-   pakai processing time, bukan event time dari pesannya sendiri). Ini
-   kunci untuk paham kenapa Flink beda dari batch biasa saat datanya
-   benar-benar tidak pernah berhenti.
-11. **Windowing** (tumbling/sliding window) — begitu ada event time,
-   agregasi per interval waktu (per menit/jam) jadi langkah lanjutan
-   yang wajar. Cocok dicoba di atas topic Kafka yang sudah bisa dibaca.
 12. **Format pesan Kafka** — kalau skema pesan di `topic_kafka` sudah
    diketahui (misal JSON), ganti `format = 'raw'` di
    `hello_flink_kafka.py` jadi `'json'` biar field-fieldnya otomatis jadi

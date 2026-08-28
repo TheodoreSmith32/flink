@@ -1,0 +1,62 @@
+[
+  {
+    "pu_location_id": 7,
+    "pu_location_name": "Grogol",
+    "kota": "Jakarta Barat",
+    "weather_location_id": 3
+  },
+  {
+    "pu_location_id": 8,
+    "pu_location_name": "Tomang",
+    "kota": "Jakarta Barat",
+    "weather_location_id": 3
+  },
+  {
+    "pu_location_id": 9,
+    "pu_location_name": "Kebon Jeruk",
+    "kota": "Jakarta Barat",
+    "weather_location_id": 3
+  },
+  {
+    "pu_location_id": 13,
+    "pu_location_name": "Menteng",
+    "kota": "Jakarta Pusat",
+    "weather_location_id": 1
+  },
+  {
+    "pu_location_id": 14,
+    "pu_location_name": "Cikini",
+    "kota": "Jakarta Pusat",
+    "weather_location_id": 1
+  },
+  {
+    "pu_location_id": 21,
+    "pu_location_name": "Kelapa Gading",
+    "kota": "Jakarta Utara",
+    "weather_location_id": 2
+  },
+  {
+    "pu_location_id": 22,
+    "pu_location_name": "Pluit",
+    "kota": "Jakarta Utara",
+    "weather_location_id": 2
+  },
+  {
+    "pu_location_id": 30,
+    "pu_location_name": "Kebayoran Baru",
+    "kota": "Jakarta Selatan",
+    "weather_location_id": 4
+  },
+  {
+    "pu_location_id": 31,
+    "pu_location_name": "Kemang",
+    "kota": "Jakarta Selatan",
+    "weather_location_id": 4
+  },
+  {
+    "pu_location_id": 35,
+    "pu_location_name": "Cawang",
+    "kota": "Jakarta Timur",
+    "weather_location_id": 5
+  }
+]

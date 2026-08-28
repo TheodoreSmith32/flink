@@ -1,0 +1,8 @@
+{
+  "id": 1025,
+  "pickup_datetime": "2024-01-15T17:03:00",
+  "pu_location_id": 7,
+  "pu_location_name": "Grogol",
+  "trip_distance": 1.1,
+  "fare_amount": 8
+}
