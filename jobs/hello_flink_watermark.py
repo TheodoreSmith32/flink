@@ -18,7 +18,7 @@ Python di DataStream API PyFlink 1.17.2 gak jalan di scheduled JVM timer
 yang independen, jadi gak bisa dipakai buat demo "late event di-drop" yang
 kredibel dari source Python biasa.
 
-Makanya dipindah ke pendekatan yang SAMA seperti fraud_job.py dan
+Makanya dipindah ke pendekatan yang SAMA seperti
 flink_sql_01.py yang sudah TERBUKTI jalan: `WATERMARK FOR ... AS ...` di
 DDL Table API/SQL. Watermark generator-nya di sini 100% native Java (bukan
 lewat callback Python), jadi gak kena masalah di atas -- dan karena
@@ -35,8 +35,8 @@ Alur demo:
     Event yang telat parah TIDAK akan muncul di window manapun -- itu bukti
     dia di-drop.
 
-SEBELUM JALANKAN (butuh docker-compose.yml yang sudah ada, dipakai bareng
-demo fraud detection -- topic-nya beda jadi gak numpuk sama data fraud):
+SEBELUM JALANKAN (butuh docker-compose.yml, Kafka lokal terpisah dari
+broker dev Bank Sinarmas beneran):
     docker compose up -d
     (di terminal lain) python producer/watermark_demo_producer.py
 
@@ -64,9 +64,7 @@ load_dotenv(os.path.join(base_dir, ".env"))
 
 # Broker & topic LOKAL (docker-compose.yml) -- SENGAJA bukan
 # KAFKA_BOOTSTRAP_SERVERS/KAFKA_TOPIC (itu broker dev Bank Sinarmas
-# beneran), sama alasannya dengan KAFKA_FRAUD_BOOTSTRAP_SERVERS di
-# usecases/fraud_detection/fraud_job.py -- data belajar jangan numpang di
-# broker beneran.
+# beneran) -- data belajar jangan numpang di broker beneran.
 bootstrap_servers = os.environ.get("KAFKA_LOCAL_BOOTSTRAP_SERVERS", "localhost:9094").strip()
 topic = os.environ.get("KAFKA_WATERMARK_TOPIC", "watermark_demo").strip()
 
@@ -82,7 +80,7 @@ def create_table_env() -> TableEnvironment:
     t_env.get_config().set("pipeline.jars", f"file://{kafka_jar}")
 
     # WAJIB -- topic ini dibuat via KAFKA_AUTO_CREATE_TOPICS_ENABLE jadi
-    # cuma 1 partition. Sama seperti catatan panjang di fraud_job.py:
+    # cuma 1 partition (temuan nyata dari use case lain yang pernah ada di repo ini):
     # TableEnvironment default parallelism = jumlah CPU core, dan watermark
     # gabungan Flink = MINIMUM dari SEMUA source subtask paralel (termasuk
     # yang idle karena gak kebagian partition) -- tanpa baris ini, window

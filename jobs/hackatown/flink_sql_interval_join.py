@@ -165,7 +165,7 @@ def create_table_env() -> TableEnvironment:
     # DDL-nya -- Flink perlu functionnya sudah ada di catalog pas parse DDL.
     t_env.create_temporary_function("weather_zone_of", weather_zone_of)
 
-    # Beda dari fraud_job.py/hello_flink_watermark.py: baris ini di sini
+    # Beda dari hello_flink_watermark.py: baris ini di sini
     # BUKAN buat menghindari bug watermark-gak-maju (window TUMBLE di kedua
     # file itu emang butuh watermark maju dulu buat nutup window). Interval
     # join JUSTRU langsung emit match begitu ketemu di state, gak nunggu

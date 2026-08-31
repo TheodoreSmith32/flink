@@ -50,7 +50,6 @@ from api import (
     background_jobs,
     connectors,
     flink_runner,
-    fraud_dashboard,
     llm_runner,
     python_background_jobs,
     python_runner,
@@ -109,24 +108,6 @@ def index():
 @app.get("/connectors")
 def get_connectors():
     return connectors.list_connectors()
-
-
-@app.get("/dashboard")
-def fraud_dashboard_page():
-    return FileResponse(os.path.join(STATIC_DIR, "fraud_dashboard.html"))
-
-
-@app.get("/fraud-alerts")
-def get_fraud_alerts():
-    # Dashboard read-only untuk usecases/fraud_detection/ -- baca langsung
-    # dari Postgres lokal, TIDAK menyentuh session/TableEnvironment apa pun.
-    try:
-        return {
-            "summary": fraud_dashboard.get_summary(),
-            "alerts": fraud_dashboard.get_alerts(),
-        }
-    except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail=str(exc))
 
 
 @app.post("/sessions")
