@@ -37,6 +37,9 @@ berikutnya:
    Chat) untuk submit query interaktif dari browser.
 8. `jobs/hackatown/flink_sql_interval_join.py` — **interval join** dua
    stream (trip × cuaca), roadmap #11 windowing.
+9. `kafka-db/` — stack Docker terpisah (Kafka + Kafka Connect + Debezium
+   CDC + Metabase) buat eksperimen CDC Postgres -> Kafka -> dashboard.
+   **Belum terhubung ke Flink** -- lihat catatan penting di section 9.
 
 ## Struktur Project
 
@@ -88,6 +91,13 @@ berikutnya:
 │   ├── watermark_demo_producer.py    # Producer buat hello_flink_watermark.py
 │   ├── weather_events_producer.py    # Dummy weather_events (plain JSON) -- jalan selamanya
 │   └── trip_events_producer.py       # Dummy trip_events (Avro+Schema Registry, SEMENTARA sebelum CDC Postgres)
+├── kafka-db/                      # Stack Docker terpisah: Kafka+Connect+Debezium CDC+Metabase (lihat section 9)
+│   ├── docker-compose.yml
+│   ├── connector-config/
+│   │   └── trip-events-postgres-cdc.json   # Config connector Debezium (didaftarkan manual via REST, bukan otomatis)
+│   ├── connector-plugin/                   # Binary plugin Kafka Connect (JDBC + Debezium) -- BESAR, lihat section 9
+│   └── postgres-ddl/
+│       └── trip_events.sql                 # DDL tabel sumber CDC (dieksekusi otomatis oleh image postgres)
 ├── docker-compose.yml            # Kafka LOKAL (dipakai hello_flink_watermark.py), terpisah dari broker dev asli
 ├── requirements.txt
 ├── template.env                  # Contoh .env (isi .env asli jangan di-commit)
@@ -108,7 +118,7 @@ berikutnya:
 | google-genai | 2.17.0 | Tab "LLM Chat" (Gemini) di `api/` |
 | kafka-python | 3.0.11 | Producer Kafka murni (bukan lewat Flink) -- `producer/`, `jobs/flink_sink_postgre/produce_test_data.py` |
 | fastavro | 1.12.2 | Encode Avro manual (Confluent wire format) -- `producer/trip_events_producer.py` |
-| Docker + Docker Compose | - | `docker-compose.yml` -- Kafka LOKAL buat `jobs/hello_flink_watermark.py` |
+| Docker + Docker Compose | - | `docker-compose.yml` -- Kafka LOKAL buat `jobs/hello_flink_watermark.py`; `kafka-db/docker-compose.yml` -- stack CDC+Metabase terpisah (lihat section 9) |
 
 Rencana ke depan (belum diimplementasikan): **Dinky + Flink session
 cluster** lewat Docker, lihat `template.env` dan [Langkah
@@ -171,8 +181,9 @@ commit `.env` asli — sudah masuk `.gitignore`.
 | Service | Kegunaan | Koneksi |
 |---|---|---|
 | Kafka | Source unbounded untuk `hello_flink_kafka.py` dan tab notebook | Connector Flink `kafka` via JAR di `jars/flink-sql-connector-kafka-1.17.2.jar`, didaftarkan lewat `pipeline.jars`; alamat broker & topic dari `.env` |
-| Google Gemini | Tab "LLM Chat" di notebook `api/`, dan `llm_explainer_worker.py` | SDK `google-genai`, autentikasi via `GEMINI_API_KEY` di `.env` |
+| Google Gemini | Tab "LLM Chat" di notebook `api/` | SDK `google-genai`, autentikasi via `GEMINI_API_KEY` di `.env` |
 | Postgres | Sink `jobs/flink_sink_postgre/topic_to_postgre.py` | Connector Flink `jdbc` + driver `jars/postgresql-42.7.4.jar`; koneksi dari `.env` (`POSTGRES_*`) |
+| Debezium CDC + Metabase | Eksperimen `kafka-db/` (CDC Postgres -> Kafka -> dashboard) -- stack Docker sendiri, **belum** dibaca job Flink manapun | `kafka-db/docker-compose.yml`; connector didaftarkan manual lewat REST Kafka Connect (lihat section 9) |
 
 ## Usage
 
@@ -822,6 +833,64 @@ zona & waktunya jatuh dalam window ±30 menit dari weather event yang sudah
 terkirim; kalau enggak, ya gak muncul. `trip_events_producer.py` ini murni
 buat testing SEBELUM CDC dari Postgres jadi (lihat rencana di catatan
 "Kenapa gak langsung..." di atas) -- matikan begitu CDC-nya live.
+
+### 9. `kafka-db/` — stack CDC Postgres → Kafka + Metabase (eksperimen, belum terhubung Flink)
+
+Stack Docker **terpisah total** dari `docker-compose.yml` di root (beda
+Kafka cluster, beda port -- jangan dijalankan dengan asumsi keduanya
+"sama"). Isinya: Zookeeper, Kafka, Schema Registry, Kafka Connect (plugin
+Debezium + JDBC sudah disiapkan di `kafka-db/connector-plugin/`), Kafka UI,
+Postgres, MySQL, dan **Metabase**. Tujuannya: coba pola **CDC** (Change
+Data Capture) -- setiap `INSERT`/`UPDATE` ke tabel Postgres otomatis
+"ke-capture" jadi event Kafka, tanpa perlu producer Python manual.
+
+**Belum terhubung ke Flink sama sekali** -- saat ini alurnya cuma
+`Postgres -> Debezium -> Kafka`, dan (rencananya) Metabase baca langsung
+dari `postgres`/`mysql` di stack ini buat dashboard. Belum ada job Flink
+yang consume topic CDC ini. Kalau mau dipakai buat demo lomba (kategori
+"Most Flink-Based"), idealnya ada job Flink di tengah yang baca topic CDC,
+olah datanya (agregasi/window), baru hasilnya yang divisualisasikan --
+bukan data mentah CDC langsung ke Metabase.
+
+> **Belum diverifikasi jalan end-to-end** (belum dites `docker compose up`
+> beneran di sesi ini) -- instruksi di bawah berdasarkan baca config-nya,
+> bukan hasil run. Kalau mau pastiin, jalankan langkah di bawah dan cek
+> tiap container `docker compose ps` semuanya `Up`/`healthy`.
+
+**Port yang dipakai** (cek dulu tidak bentrok dengan service lain di
+mesinmu, terutama kalau sudah ada Postgres/MySQL native): Zookeeper
+`2181`, Kafka `9092`+`29092`, Schema Registry `8081`, Kafka Connect
+`8083`, Kafka UI `8080`, Postgres `5432`, MySQL `3306`, Metabase `3000`.
+
+Jalankan:
+
+```bash
+cd kafka-db
+docker compose up -d
+docker compose ps   # pastikan semua Up/healthy dulu sebelum lanjut
+
+# Daftarkan connector CDC (Kafka Connect baru nyala, connector-nya HARUS
+# didaftarkan manual lewat REST API -- tidak otomatis walau config-nya
+# sudah ada di connector-config/)
+curl -X POST -H "Content-Type: application/json" \
+  --data @connector-config/trip-events-postgres-cdc.json \
+  http://localhost:8083/connectors
+
+# Cek status connector-nya
+curl http://localhost:8083/connectors/trip-events-postgres-cdc/status
+```
+
+Tabel sumber (`public.trip_events`) sudah otomatis dibuat oleh image
+Postgres lewat `postgres-ddl/trip_events.sql` (di-mount ke
+`/docker-entrypoint-initdb.d`). Insert baris baru ke tabel itu (`psql -h
+localhost -U postgres`) lalu cek topic `trip_events` di Kafka UI
+(`http://localhost:8080`) atau lewat `kafka-console-consumer` -- baris itu
+harusnya nongol sebagai event Avro dalam beberapa detik. Metabase bisa
+diakses di `http://localhost:3000` (setup wizard pertama kali jalan,
+minta connect ke `postgres`/`mysql` di atas).
+
+Matikan stack ini kalau sudah selesai (`docker compose down` di dalam
+`kafka-db/`) supaya tidak numpuk container/port kepakai terus.
 
 ## Istilah Penting
 

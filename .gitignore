@@ -8,3 +8,11 @@ ENV/
 
 __pycache__/
 *.pyc
+
+# metadata Windows (muncul kalau download file lewat browser di Windows lalu
+# di-commit dari situ) -- bukan bagian dari project, aman diabaikan
+*Zone.Identifier
+
+# arsip download plugin Kafka Connect -- yang dipakai runtime adalah hasil
+# ekstraknya (kafka-db/connector-plugin/<nama>/), bukan file .zip-nya
+kafka-db/connector-plugin/*.zip
