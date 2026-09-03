@@ -108,17 +108,22 @@ def get_env(session: Session) -> TableEnvironment:
         )
         session.env = TableEnvironment.create(settings)
         # Daftarkan semua connector JAR yang tersedia dari awal (kafka,
-        # jdbc + driver MySQL/Postgres) sama seperti di hello_flink_kafka.py,
-        # biar session ini bisa langsung CREATE TABLE ... WITH ('connector'=...)
-        # tanpa langkah tambahan -- lihat api/connectors.py untuk daftar
-        # connector & jar yang dicek availability-nya. Kafka & upsert-kafka
-        # pakai jar yang sama; jdbc butuh connector jar + driver jar
-        # sekaligus (dua-duanya harus ada baru didaftarkan).
+        # jdbc + driver MySQL/Postgres, avro-confluent) sama seperti di
+        # hello_flink_kafka.py, biar session ini bisa langsung
+        # CREATE TABLE ... WITH ('connector'=...) tanpa langkah tambahan --
+        # lihat api/connectors.py untuk daftar connector & jar yang dicek
+        # availability-nya. Kafka & upsert-kafka pakai jar yang sama; jdbc
+        # butuh connector jar + driver jar sekaligus (dua-duanya harus ada
+        # baru didaftarkan). avro-confluent dibutuhkan buat source Avro+Schema
+        # Registry (misal trip_events di jobs/hackatown/flink_sql_interval_join.py)
+        # -- tanpa ini, CREATE TABLE dengan format 'avro-confluent' gagal
+        # dengan "Could not find any factory for identifier 'avro-confluent'".
         jar_names = [
             "flink-sql-connector-kafka-1.17.2.jar",
             "flink-connector-jdbc-3.1.2-1.17.jar",
             "mysql-connector-j-8.0.33.jar",
             "postgresql-42.7.4.jar",
+            "flink-sql-avro-confluent-registry-1.17.2.jar",
         ]
         jar_paths = [os.path.join(PROJECT_DIR, "jars", name) for name in jar_names]
         existing_jars = [p for p in jar_paths if os.path.exists(p)]

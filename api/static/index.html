@@ -157,6 +157,14 @@
   .connector-catalog { }
   .connector-catalog summary { cursor: pointer; font-weight: 700; padding: 0.15rem 0; font-size: 14.5px; }
   .connector-catalog summary::marker { color: var(--primary); }
+  .connector-filter { display: flex; gap: 0.35rem; margin-top: 0.75rem; }
+  .filter-btn {
+    border: 1px solid var(--border-strong); background: var(--surface); color: var(--text-muted);
+    border-radius: 20px; padding: 0.25rem 0.75rem; font-size: 12px; font-weight: 600; cursor: pointer;
+    box-shadow: none;
+  }
+  .filter-btn:hover { border-color: var(--primary); color: var(--text); }
+  .filter-btn.active { background: var(--primary-bg); border-color: var(--primary); color: var(--primary); }
   .connector-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 0.7rem; margin-top: 0.75rem; }
   .connector-card {
     border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 0.7rem 0.85rem; background: var(--bg);
@@ -276,7 +284,12 @@
   .status.SUCCESS, .status.FINISHED { background: var(--success-bg); color: var(--success); }
   .status.FAILED { background: var(--danger-bg); color: var(--danger); }
   .status.CANCELED { background: var(--neutral-bg); color: var(--neutral); }
-  .status.UNKNOWN { background: var(--danger-bg); color: var(--danger); }
+  /* UNKNOWN sengaja BUKAN warna --danger (merah, sama kayak FAILED) --
+     status ini bukan "job ini gagal", tapi "job ini sudah berhenti dan gak
+     bisa dicek lagi sukses/gagalnya" (lihat komentar _refresh_status() di
+     background_jobs.py). Dipakai --warning (kuning) biar beda kesannya
+     dari FAILED yang beneran pasti gagal. */
+  .status.UNKNOWN { background: var(--warning-bg); color: var(--warning); }
   .job-row-head .status { margin-left: 0.25rem; }
   .job-row-head button { margin-left: auto; }
 
@@ -324,13 +337,6 @@
 </head>
 <body>
   <h1><span class="app-icon">&#9889;</span>PyFlink Notebook</h1>
-  <p class="subtitle"><small class="hint">
-    Notebook SQL/Python butuh SESSION dulu -- tiap session punya TableEnvironment sendiri, jadi tabel/state satu session tidak bocor ke session lain.
-    Di dalam satu session, tab SQL dan tab Python tetap berbagi TableEnvironment yang sama (<code>t_env</code>) -- tabel yang dibuat di satu tab bisa langsung dipakai di tab lain.
-    SELECT dari source unbounded (misal Kafka) otomatis dibatasi ke beberapa baris pertama saja (preview).
-    Alamat sensitif (misal broker Kafka) bisa dirujuk pakai <code>${NAMA_VAR}</code> di SQL, diambil dari <code>.env</code> di server.
-    LLM Chat ada permanen di panel kiri -- terpisah total dari Flink dan dari session, jadi tetap bisa dipakai walau SQL/Python lagi nyangkut (dan sebaliknya).
-  </small></p>
 
   <div class="app-layout">
     <div class="chat-toggle-strip">
@@ -405,6 +411,11 @@
         <div id="tab-sql" class="tab-panel active">
           <details class="connector-catalog panel" id="connector-catalog" open>
             <summary>Daftar connector yang tersedia</summary>
+            <div class="connector-filter" id="connector-filter">
+              <button class="filter-btn active" data-kind="all">Semua</button>
+              <button class="filter-btn" data-kind="source">Source</button>
+              <button class="filter-btn" data-kind="sink">Sink</button>
+            </div>
             <div class="connector-list" id="connector-list"></div>
           </details>
           <div class="cells" id="sql-cells"></div>
@@ -796,17 +807,24 @@ print(df)`);
     initSessions();
 
     // --- Katalog connector (tab SQL) ---
-    // Data reference, tidak terikat session apa pun -- dimuat sekali saat
-    // halaman dibuka. Tombol "+ Pakai contoh ini" cuma nambah cell SQL baru
-    // isi template-nya (lihat addCell(sqlConfig, ...)), user masih perlu
-    // klik Run sendiri seperti cell manapun.
-    async function loadConnectors() {
-      const res = await fetch("/connectors");
-      const connectorList = await res.json();
+    // Data reference, tidak terikat session apa pun -- dimuat SEKALI saat
+    // halaman dibuka (connectorList di-cache di variabel ini), filter
+    // Semua/Source/Sink di bawah cuma render ulang dari cache-nya, tidak
+    // fetch ulang ke /connectors tiap klik. Tombol "+ Pakai contoh ini"
+    // cuma nambah cell SQL baru isi template-nya (lihat addCell(sqlConfig,
+    // ...)), user masih perlu klik Run sendiri seperti cell manapun.
+    let connectorList = [];
+    let connectorFilter = "all";
+
+    function renderConnectorList() {
       const listEl = document.getElementById("connector-list");
       listEl.innerHTML = "";
 
-      for (const c of connectorList) {
+      const filtered = connectorFilter === "all"
+        ? connectorList
+        : connectorList.filter((c) => c.kind === connectorFilter);
+
+      for (const c of filtered) {
         const card = document.createElement("div");
         card.className = "connector-card";
         const badgeClass = c.available ? "available" : "unavailable";
@@ -826,6 +844,21 @@ print(df)`);
         listEl.appendChild(card);
       }
     }
+
+    async function loadConnectors() {
+      const res = await fetch("/connectors");
+      connectorList = await res.json();
+      renderConnectorList();
+    }
+
+    document.querySelectorAll("#connector-filter .filter-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        connectorFilter = btn.dataset.kind;
+        document.querySelectorAll("#connector-filter .filter-btn").forEach((b) => b.classList.remove("active"));
+        btn.classList.add("active");
+        renderConnectorList();
+      });
+    });
 
     loadConnectors();
 

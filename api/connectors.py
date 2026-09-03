@@ -16,6 +16,10 @@ didownload, tetap ditampilkan di UI (biar user tahu itu opsinya) tapi
 ditandai belum tersedia dan tombol "pakai contoh"-nya dimatikan, lihat
 hello_flink_kafka.py untuk cara download JAR-nya.
 
+Tiap entry punya field 'kind' ('source' atau 'sink') -- dipakai UI buat
+filter "Semua/Source/Sink" di panel katalog (lihat static/index.html), murni
+informasi tampilan, tidak dipakai logic backend lain.
+
 Template SQL sengaja TIDAK diberi komentar SQL (`-- ...`) -- run_job() di
 flink_runner.py mendeteksi SELECT/INSERT dengan cek awal string statement
 (lihat run_job()), jadi komentar di depan SELECT akan bikin salah rute
@@ -36,6 +40,7 @@ _CATALOG = [
     {
         "key": "datagen",
         "label": "datagen (source)",
+        "kind": "source",
         "description": "Generate data dummy otomatis -- tidak butuh file/topic asli. Paling gampang buat coba-coba dulu.",
         "builtin": True,
         "template": """CREATE TABLE datagen_source (
@@ -51,6 +56,7 @@ SELECT id, nama FROM datagen_source;""",
     {
         "key": "filesystem-source",
         "label": "filesystem (source)",
+        "kind": "source",
         "description": "Baca file CSV di disk sebagai table. Path relatif ke folder tempat uvicorn dijalankan (root project).",
         "builtin": True,
         "template": """CREATE TABLE filesystem_source (
@@ -66,6 +72,7 @@ SELECT kalimat FROM filesystem_source;""",
     {
         "key": "filesystem-sink",
         "label": "filesystem (sink)",
+        "kind": "sink",
         "description": "Tulis hasil query ke file CSV baru di disk. Lengkapi sendiri dengan INSERT INTO ... SELECT sesuai kebutuhan.",
         "builtin": True,
         "template": """CREATE TABLE filesystem_sink (
@@ -80,6 +87,7 @@ SELECT kalimat FROM filesystem_source;""",
     {
         "key": "print",
         "label": "print (sink)",
+        "kind": "sink",
         "description": "Cetak tiap baris ke stdout proses server (bukan ke browser) -- cek terminal uvicorn buat lihat isinya. Cocok buat debug cepat.",
         "builtin": True,
         "template": """CREATE TABLE print_sink (
@@ -92,6 +100,7 @@ SELECT kalimat FROM filesystem_source;""",
     {
         "key": "blackhole",
         "label": "blackhole (sink)",
+        "kind": "sink",
         "description": "Buang semua data yang masuk, tidak ditulis ke mana pun -- cocok buat tes INSERT INTO ... SELECT tanpa peduli hasil akhirnya.",
         "builtin": True,
         "template": """CREATE TABLE blackhole_sink (
@@ -104,6 +113,7 @@ SELECT kalimat FROM filesystem_source;""",
     {
         "key": "kafka-source",
         "label": "kafka (source)",
+        "kind": "source",
         "description": "Baca dari topic Kafka. Broker & nama topic diambil dari .env lewat ${KAFKA_BOOTSTRAP_SERVERS}/${KAFKA_TOPIC}. 'scan.bounded.mode' sengaja diisi supaya preview SELECT di notebook ini berhenti sendiri, bukan menggantung selamanya.",
         "builtin": False,
         "template": """CREATE TABLE kafka_source (
@@ -123,6 +133,7 @@ SELECT message FROM kafka_source;""",
     {
         "key": "kafka-sink",
         "label": "kafka (sink)",
+        "kind": "sink",
         "description": "Tulis hasil query ke topic Kafka lewat INSERT INTO ... SELECT. Broker & topic juga diambil dari .env.",
         "builtin": False,
         "template": """CREATE TABLE kafka_sink (
@@ -137,6 +148,7 @@ SELECT message FROM kafka_source;""",
     {
         "key": "upsert-kafka",
         "label": "upsert-kafka (sink)",
+        "kind": "sink",
         "description": (
             "Sama-sama Kafka, tapi khusus buat hasil query yang NILAINYA BERUBAH-UBAH "
             "(misal agregasi GROUP BY di streaming mode) -- 'kafka' biasa cuma bisa append "
@@ -162,6 +174,7 @@ SELECT message FROM kafka_source;""",
     {
         "key": "jdbc-source",
         "label": "jdbc (source)",
+        "kind": "source",
         "description": (
             "Baca dari tabel database relasional (contoh ini: MySQL, pakai kredensial "
             "MYSQL_* yang sama dengan setup Dinky di .env). PENTING: 'jdbc:mysql://${MYSQL_ADDR}/...' "
@@ -186,6 +199,7 @@ SELECT id, nama FROM jdbc_source;""",
     {
         "key": "jdbc-source-postgres",
         "label": "jdbc (source, Postgres)",
+        "kind": "source",
         "description": (
             "Baca dari tabel PostgreSQL, pakai kredensial POSTGRES_* di .env "
             "(punya kamu sendiri, misal Postgres local)."
@@ -207,6 +221,7 @@ SELECT id, nama FROM jdbc_source_pg;""",
     {
         "key": "jdbc-sink-postgres",
         "label": "jdbc (sink, Postgres)",
+        "kind": "sink",
         "description": (
             "Tulis hasil query ke tabel PostgreSQL lewat INSERT INTO ... SELECT, pakai "
             "kredensial POSTGRES_* di .env. Tabelnya harus sudah ada duluan di Postgres "
@@ -232,6 +247,7 @@ SELECT id, nama FROM jdbc_source_pg;""",
     {
         "key": "jdbc-sink",
         "label": "jdbc (sink)",
+        "kind": "sink",
         "description": (
             "Tulis hasil query ke tabel MySQL lewat INSERT INTO ... SELECT. PRIMARY KEY di DDL "
             "membuat sink ini upsert (UPDATE kalau key sudah ada) alih-alih selalu INSERT baru -- "

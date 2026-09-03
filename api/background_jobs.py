@@ -74,6 +74,17 @@ def _map_status(raw_status) -> BackgroundJobStatus:
     return BackgroundJobStatus.UNKNOWN
 
 
+# Ambang waktu (detik) buat mutusin pesan UNKNOWN mana yang dipakai --
+# lihat _refresh_status(). Ini heuristik kasar, bukan angka presisi: job
+# yang MiniCluster-nya sudah mati dalam waktu SESINGKAT ini sejak disubmit
+# hampir pasti bukan gagal di tengah jalan, tapi source-nya memang
+# bounded/cepat (misal datagen dengan 'number-of-rows' diisi) yang tuntas
+# duluan sebelum status ini sempat dicek -- ditemukan lewat reproduksi
+# beneran kasus persis ini (datagen 5 baris -> print sink, job selesai <
+# beberapa detik, datanya kebukti masuk semua di stdout server).
+UNKNOWN_LIKELY_FINISHED_SECONDS = 15
+
+
 def _refresh_status(job: BackgroundJob) -> None:
     # Job yang gagal submit dari awal (job_client sendiri gak ada), atau yang
     # statusnya sudah final (bukan RUNNING lagi), gak perlu -- dan sering kali
@@ -95,14 +106,34 @@ def _refresh_status(job: BackgroundJob) -> None:
         # bukan cuma race condition sesaat. Job LAIN yang masih RUNNING di
         # session yang sama tetap aman (mini-cluster mereka sendiri-sendiri).
         # Kita gak bisa lagi bedain dari sini apakah job ini tadinya selesai
-        # normal atau gagal -- jadi UNKNOWN, dengan pesan singkat, BUKAN
-        # stack trace Java mentah yang bikin serem tampilannya di UI.
+        # normal atau gagal -- jadi UNKNOWN, BUKAN stack trace Java mentah
+        # yang bikin serem tampilannya di UI, dan BUKAN pesan yang kesannya
+        # "job ini error" (lihat juga .status.UNKNOWN di index.html -- warna
+        # badge-nya sengaja bukan merah/danger lagi, biar gak kebaca sebagai
+        # kegagalan). Pesannya dikalibrasi dari SEBERAPA LAMA job itu sempat
+        # jalan sebelum berhenti, karena itu sinyal paling kuat yang masih
+        # kita punya buat nebak "ini kemungkinan besar selesai normal" vs
+        # "gak jelas".
         job.status = BackgroundJobStatus.UNKNOWN
-        job.error = (
-            "Status job ini sudah tidak bisa dicek lagi -- cluster job ini "
-            "sendiri sudah berhenti (biasanya berarti job sudah "
-            "selesai/gagal di luar kendali stop() kita)."
-        )
+        elapsed = time.time() - job.submitted_at
+        if elapsed < UNKNOWN_LIKELY_FINISHED_SECONDS:
+            job.error = (
+                f"Job ini berhenti {elapsed:.1f} detik setelah disubmit -- BUKAN berarti gagal. "
+                "Ini paling sering kejadian kalau source-nya bounded/cepat selesai (misal datagen "
+                "dengan 'number-of-rows' diisi angka kecil): job-nya tuntas duluan sebelum status "
+                "ini sempat dicek ulang, MiniCluster-nya langsung mati begitu selesai, jadi status "
+                "pastinya (SUCCESS atau FAILED) sudah tidak bisa diambil lagi dari sini. Cek "
+                "sink-nya langsung buat mastiin datanya beneran masuk (misal stdout server buat "
+                "connector 'print', atau isi foldernya buat 'filesystem')."
+            )
+        else:
+            job.error = (
+                f"Job ini sempat jalan ~{elapsed:.0f} detik sebelum berhenti, tapi hasil akhirnya "
+                "(sukses, gagal, atau ke-cancel dari luar) sudah tidak bisa dicek lagi -- MiniCluster "
+                "job ini mati begitu job-nya berhenti, apapun sebabnya, jadi statusnya cuma bisa "
+                "ditandai gak jelas (bukan otomatis dianggap gagal). Cek sink-nya langsung buat tahu "
+                "hasil terakhirnya."
+            )
 
 
 def to_dict(job: BackgroundJob) -> dict:

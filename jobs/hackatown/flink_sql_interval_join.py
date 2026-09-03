@@ -88,6 +88,15 @@ bersih cuma isi Avro -- bukan diakalin ganti ke `latest-offset`, supaya
 (magic-byte-mismatch), itu tandanya ada pesan non-Avro numpang lagi di
 topic -- bersihin topic-nya, bukan format DDL-nya yang diubah.
 
+SINK: hasil join di-INSERT ke MySQL (tabel `traffic_weather_result`, connector
+'jdbc') lewat kredensial MYSQL_SINK_* di .env -- BUKAN lagi cuma di-print
+kayak versi sebelumnya. DDL tabelnya ada di
+kafka-db/mysql-ddl/traffic_weather_result.sql, jalan lewat MySQL yang sudah
+disediain kafka-db/docker-compose.yml. Kalau volume MySQL-nya sudah pernah
+diinisialisasi sebelum file DDL ini ada, docker-entrypoint-initdb.d TIDAK
+otomatis jalan lagi (cuma jalan sekali pas volume kosong) -- jalankan
+manual: `docker exec -i mysql mysql -uroot -pmysql < kafka-db/mysql-ddl/traffic_weather_result.sql`
+
 SEBELUM JALANKAN (2 terminal terpisah):
     python producer/weather_events_producer.py
     python producer/trip_events_producer.py
@@ -119,6 +128,15 @@ weather_topic = os.environ.get("KAFKA_WEATHER_TOPIC", "weather_events").strip()
 # gak butuh registry sama sekali.
 schema_registry_url = os.environ.get("SCHEMA_REGISTRY_URL", "").strip()
 
+# Sink hasil join -- MySQL dari kafka-db/docker-compose.yml (lihat
+# kafka-db/mysql-ddl/traffic_weather_result.sql buat DDL tabelnya).
+mysql_host = os.environ.get("MYSQL_SINK_HOST", "").strip()
+mysql_port = os.environ.get("MYSQL_SINK_PORT", "").strip()
+mysql_db = os.environ.get("MYSQL_SINK_DB", "").strip()
+mysql_user = os.environ.get("MYSQL_SINK_USER", "").strip()
+mysql_password = os.environ.get("MYSQL_SINK_PASSWORD", "").strip()
+mysql_table = os.environ.get("MYSQL_SINK_TABLE", "").strip()
+
 # Toleransi keterlambatan sebelum watermark nganggap event "sudah lewat" --
 # sesuai flink_sql_01.py & dokumen use case, sama-sama 5 menit di kedua sisi.
 OUT_OF_ORDERNESS_MINUTES = 5
@@ -148,17 +166,30 @@ def weather_zone_of(pu_location_id):
 def create_table_env() -> TableEnvironment:
     if not schema_registry_url:
         raise SystemExit("SCHEMA_REGISTRY_URL masih kosong di .env (dibutuhkan trip_events, format avro-confluent).")
+    if not all([mysql_host, mysql_port, mysql_db, mysql_user, mysql_table]):
+        raise SystemExit(
+            "Kredensial MySQL sink masih kosong di .env. Isi dulu MYSQL_SINK_HOST, "
+            "MYSQL_SINK_PORT, MYSQL_SINK_DB, MYSQL_SINK_USER, MYSQL_SINK_PASSWORD, "
+            "MYSQL_SINK_TABLE (lihat template.env), dan pastikan "
+            "kafka-db/mysql-ddl/traffic_weather_result.sql sudah dijalankan di MySQL-nya."
+        )
 
     settings = EnvironmentSettings.in_streaming_mode()
     t_env = TableEnvironment.create(settings)
 
-    # Dua JAR: connector Kafka + format avro-confluent (buat trip_events).
-    # weather_events (plain JSON) gak butuh JAR tambahan di luar Kafka
-    # connector, sama seperti sebelumnya. Pola sama dengan
-    # jobs/hello_flink_kafka_avro.py.
+    # 4 JAR: connector Kafka + format avro-confluent (buat trip_events),
+    # plus connector jdbc + driver MySQL (buat sink hasil join). weather_events
+    # (plain JSON) gak butuh JAR tambahan di luar Kafka connector. Pola JDBC
+    # sama dengan jobs/flink_sink_postgre/topic_to_postgre.py, drivernya
+    # tinggal ganti postgresql -> mysql.
     kafka_jar = os.path.join(base_dir, "jars", "flink-sql-connector-kafka-1.17.2.jar")
     avro_jar = os.path.join(base_dir, "jars", "flink-sql-avro-confluent-registry-1.17.2.jar")
-    t_env.get_config().set("pipeline.jars", f"file://{kafka_jar};file://{avro_jar}")
+    jdbc_jar = os.path.join(base_dir, "jars", "flink-connector-jdbc-3.1.2-1.17.jar")
+    mysql_driver_jar = os.path.join(base_dir, "jars", "mysql-connector-j-8.0.33.jar")
+    t_env.get_config().set(
+        "pipeline.jars",
+        f"file://{kafka_jar};file://{avro_jar};file://{jdbc_jar};file://{mysql_driver_jar}",
+    )
 
     # WAJIB didaftarkan SEBELUM CREATE TABLE trip_events di bawah, karena
     # dipakai sebagai computed column (weather_zone_of(pu_location_id)) di
@@ -230,16 +261,52 @@ def register_source_tables(t_env: TableEnvironment):
     """)
 
 
+def register_sink_table(t_env: TableEnvironment):
+    # PRIMARY KEY (id) NOT ENFORCED -- bikin connector jdbc otomatis pindah
+    # ke mode UPSERT (ON DUPLICATE KEY UPDATE) alih-alih INSERT polos, biar
+    # idempotent kalau job di-restart dan trip yang sama kebaca ulang dari
+    # earliest-offset. Tabelnya sendiri dibuat lewat
+    # kafka-db/mysql-ddl/traffic_weather_result.sql, bukan di sini --
+    # connector jdbc Flink TIDAK auto-create tabel.
+    jdbc_url = f"jdbc:mysql://{mysql_host}:{mysql_port}/{mysql_db}"
+    t_env.execute_sql(f"""
+        CREATE TABLE mysql_sink (
+            id BIGINT,
+            pickup_datetime TIMESTAMP(3),
+            pu_location_id INT,
+            pu_location_name STRING,
+            weather_location_id INT,
+            trip_distance DOUBLE,
+            fare_amount DOUBLE,
+            weather_condition STRING,
+            precipitation DOUBLE,
+            PRIMARY KEY (id) NOT ENFORCED
+        ) WITH (
+            'connector' = 'jdbc',
+            'url' = '{jdbc_url}',
+            'table-name' = '{mysql_table}',
+            'username' = '{mysql_user}',
+            'password' = '{mysql_password}'
+        )
+    """)
+
+
 def build_joined_table(t_env: TableEnvironment):
+    # t.id ikut di-SELECT khusus buat jadi PRIMARY KEY di mysql_sink (lihat
+    # register_sink_table) -- gak dipakai di file ini sebelum ada sink,
+    # makanya dulu gak ada. w.`condition` dialiaskan ke weather_condition di
+    # sini juga -- CONDITION reserved keyword baik di Flink SQL MAUPUN MySQL,
+    # jadi dihindari sekali di sini, bukan di-backtick di kedua sisi.
     return t_env.sql_query(f"""
         SELECT
+            t.id,
             t.pickup_datetime,
             t.pu_location_id,
             t.pu_location_name,
             t.weather_location_id,
             t.trip_distance,
             t.fare_amount,
-            w.`condition`,
+            w.`condition` AS weather_condition,
             w.precipitation
         FROM trip_events t
         JOIN weather_events w
@@ -252,16 +319,28 @@ def build_joined_table(t_env: TableEnvironment):
 def main():
     t_env = create_table_env()
     register_source_tables(t_env)
+    register_sink_table(t_env)
 
     print(f"Baca topic '{trip_topic}' + '{weather_topic}' dari {bootstrap_servers} "
           "(Ctrl+C untuk berhenti)")
     print(f"Interval join +/- {JOIN_INTERVAL_MINUTES} menit, lokasi trip (kelurahan) "
           "di-lookup ke zona cuaca (kota) dulu lewat weather_zone_of().\n"
+          f"Hasil di-sink ke MySQL {mysql_host}:{mysql_port}/{mysql_db}.{mysql_table}.\n"
           "Jalankan producer/weather_events_producer.py + producer/trip_events_producer.py "
           "di terminal lain buat kirim contoh event.\n")
 
     joined_table = build_joined_table(t_env)
-    joined_table.execute().print()
+    t_env.create_temporary_view("joined_result", joined_table)
+
+    # Genuinely unbounded (sama seperti sebelumnya) -- .wait() di sini bakal
+    # menggantung sampai Ctrl+C, bukan nunggu "selesai" kayak job bounded.
+    t_env.execute_sql("""
+        INSERT INTO mysql_sink
+        SELECT id, pickup_datetime, pu_location_id, pu_location_name,
+               weather_location_id, trip_distance, fare_amount,
+               weather_condition, precipitation
+        FROM joined_result
+    """).wait()
 
 
 if __name__ == "__main__":
