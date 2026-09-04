@@ -206,7 +206,10 @@ def to_confluent_avro(record: dict, schema_id: int) -> bytes:
 def build_trip(loc: dict) -> dict:
     global _next_id
     trip_distance = round(random.uniform(0.5, 15.0), 1)
-    fare_amount = round(4 + trip_distance * random.uniform(3.0, 5.0))
+    # Rupiah: tarif dasar 4.000 + jarak x 3.000-5.000/km, dibulatkan ke
+    # kelipatan 1.000 terdekat (mis. 60000 = "60rb"), bukan lagi angka kecil
+    # gaya dolar (4-73) seperti sebelumnya.
+    fare_amount = round((4000 + trip_distance * random.uniform(3000.0, 5000.0)) / 1000) * 1000
 
     trip = {
         "id": _next_id,
